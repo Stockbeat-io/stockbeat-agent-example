@@ -134,7 +134,15 @@ Stop-loss orders are exempt from `MIN_HOLDING_DAYS`, so a genuine breakdown can 
 docker compose up -d
 ```
 
-Docker files are included in the repo. Each service in `docker-compose.yml` runs one agent profile on its configured schedule.
+This starts two services: `ollama` (which holds the model cache in a named volume) and
+`agent`. The `agent` service runs a single profile once and exits — `technical-example`
+by default, set in the `Dockerfile` CMD. Compose does not schedule anything; to run on a
+schedule, use launchd or cron below, or invoke `docker compose run --rm agent python
+main.py --agent <profile>` from your own scheduler.
+
+Inside the compose network the Ollama host is the service name, not `localhost`, so the
+`agent` service overrides `LLM_BASE_URL` to `http://ollama:11434`. You still need a
+`.env` file — copy it from `.env.example` first.
 
 ### macOS launchd
 

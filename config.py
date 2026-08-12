@@ -20,8 +20,22 @@ def _env_bool(name: str, default: bool) -> bool:
 # --- Connections ---
 STOCKBEAT_API_KEY = os.getenv("STOCKBEAT_API_KEY", "")
 STOCKBEAT_BASE_URL = os.getenv("STOCKBEAT_BASE_URL", "https://stockbeat2026.uc.r.appspot.com")
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral:7b")
+
+# --- LLM provider ---
+# "ollama" (local, free, the default), "openai-compatible" (OpenAI, LM Studio,
+# vLLM, Groq, OpenRouter, Together — they differ only in base_url), "anthropic".
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
+LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+
+_PROVIDER_DEFAULTS = {
+    "ollama": ("http://localhost:11434", "mistral:7b"),
+    "openai-compatible": ("https://api.openai.com", ""),
+    "anthropic": ("https://api.anthropic.com", "claude-sonnet-4-6"),
+}
+_base_default, _model_default = _PROVIDER_DEFAULTS.get(LLM_PROVIDER, ("", ""))
+
+LLM_BASE_URL = os.getenv("LLM_BASE_URL") or _base_default
+LLM_MODEL = os.getenv("LLM_MODEL") or _model_default
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")
 
 # DRY_RUN gates all StockBeat write (POST) calls. Default ON.

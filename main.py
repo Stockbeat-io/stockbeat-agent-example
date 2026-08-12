@@ -5,7 +5,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import config
-from analysis.llm import OllamaClient
+from analysis.llm import LLMClient, build_client
 from analysis.pipeline import run_comment_replies, run_debate
 from data.enrichment import enrich_candidates
 from data.fundamentals import get_sector
@@ -170,8 +170,8 @@ def _handle_comment_replies(client, llm, now_et) -> list:
     return submitted
 
 
-def _default_llm() -> OllamaClient:
-    return OllamaClient(config.OLLAMA_BASE_URL, config.OLLAMA_MODEL)
+def _default_llm() -> LLMClient:
+    return build_client()
 
 
 def run(now_et=None, client=None, llm=None) -> dict:

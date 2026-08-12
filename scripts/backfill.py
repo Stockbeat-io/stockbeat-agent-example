@@ -4,8 +4,8 @@ Idempotent and safe to re-run: grading is write-once, so a checkpoint already
 present is left alone and only newly-elapsed windows are added.
 
 Features cannot be backfilled — the screening evidence behind past decisions was
-never recorded — so historical records keep `features: null` and only decisions
-made after this change support attribution analysis.
+never recorded — so historical records have a null features field and only
+decisions made after this change support attribution analysis.
 """
 
 import argparse

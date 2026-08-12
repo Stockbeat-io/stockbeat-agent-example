@@ -86,7 +86,7 @@ def test_all_agents_underpowered_gets_an_explicit_warning(tmp_path):
 
 def test_large_samples_are_not_labelled_insufficient(tmp_path):
     _agent_log(tmp_path, "momentum-mike",
-               [_buy(f"T{i}", 5.0) for i in range(review.MIN_SAMPLES + 1)])
+               [_buy(f"T{i}", 5.0) for i in range(review.SAMPLE_THRESHOLD + 1)])
     out = review.render(review.load_decisions(tmp_path))
     assert "insufficient" not in out
     assert "do not act on it" not in out

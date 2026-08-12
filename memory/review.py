@@ -7,7 +7,7 @@ The report exists as much to prevent a wrong conclusion as to support a right
 one. Per-decision alpha has a standard deviation of roughly 6 percentage
 points, so a dozen decisions cannot separate skill from luck — an agent ranking
 built on them looks authoritative and means nothing. Every per-agent figure is
-therefore printed with its sample size, and rankings below MIN_SAMPLES are
+therefore printed with its sample size, and rankings below SAMPLE_THRESHOLD are
 labelled as insufficient rather than silently shown.
 """
 
@@ -23,7 +23,7 @@ from memory.memory import best_checkpoint
 # Below this many graded decisions, an agent's mean alpha is not interpretable.
 # Derived from sd ~6.1pp per decision: detecting a 2pp edge at 95% confidence
 # needs (1.96 * 6.1 / 2)^2 ~ 36 samples.
-MIN_SAMPLES = 30
+SAMPLE_THRESHOLD = 30
 ASSUMED_SD = 6.1
 
 
@@ -112,8 +112,8 @@ def _fmt(stats: dict, enforce_min: bool) -> str:
         return f"{'-':>9}{'-':>8}{'-':>9}   no data"
     line = (f"{stats['mean']:>+9.2f}{stats['win_pct']:>7.0f}%"
             f"{stats['n']:>9}   ±{stats['ci']:.2f}pp")
-    if enforce_min and stats["n"] < MIN_SAMPLES:
-        line += f"   insufficient (need ~{MIN_SAMPLES})"
+    if enforce_min and stats["n"] < SAMPLE_THRESHOLD:
+        line += f"   insufficient (need ~{SAMPLE_THRESHOLD})"
     return line
 
 
@@ -139,9 +139,9 @@ def render(records: list, checkpoint: str = "20d") -> str:
                     key=lambda kv: kv[1]["mean"], reverse=True)
     for agent, stats in ranked:
         out.append(f"{agent:22}{_fmt(stats, True)}")
-    if ranked and all(s["n"] < MIN_SAMPLES for _, s in ranked):
+    if ranked and all(s["n"] < SAMPLE_THRESHOLD for _, s in ranked):
         out.append("")
-        out.append(f"  NOTE: every agent is below {MIN_SAMPLES} graded decisions. This"
+        out.append(f"  NOTE: every agent is below {SAMPLE_THRESHOLD} graded decisions. This"
                    " ordering is not")
         out.append("  distinguishable from chance — do not act on it.")
     out.append("")

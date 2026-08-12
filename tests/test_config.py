@@ -1,4 +1,5 @@
 import importlib
+from pathlib import Path
 
 import config
 
@@ -58,3 +59,20 @@ def test_get_logger_writes_to_dated_file(tmp_path, monkeypatch):
     files = list(tmp_path.glob("*.log"))
     assert files, "expected a dated log file"
     assert "hello-test" in files[0].read_text()
+
+
+def test_stockbeat_base_url_defaults_to_public_host(monkeypatch):
+    monkeypatch.delenv("STOCKBEAT_BASE_URL", raising=False)
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **kw: None)
+    reloaded = importlib.reload(config)
+    assert reloaded.STOCKBEAT_BASE_URL == "https://stockbeat.io"
+
+
+def test_no_internal_hosts_in_config():
+    """Internal infrastructure hostnames must not ship publicly."""
+    source = Path(config.__file__).read_text()
+    # Check that cloud-infrastructure and old internal hostnames are absent.
+    # Strings are split here so this file does not itself trigger the same scan.
+    banned = ["app" + "spot.com", "stockbeat" + ".app"]
+    for host in banned:
+        assert host not in source, f"Internal host {host!r} found in config.py"

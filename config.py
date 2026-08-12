@@ -19,7 +19,7 @@ def _env_bool(name: str, default: bool) -> bool:
 
 # --- Connections ---
 STOCKBEAT_API_KEY = os.getenv("STOCKBEAT_API_KEY", "")
-STOCKBEAT_BASE_URL = os.getenv("STOCKBEAT_BASE_URL", "https://stockbeat2026.uc.r.appspot.com")
+STOCKBEAT_BASE_URL = os.getenv("STOCKBEAT_BASE_URL", "https://stockbeat.io")
 
 # --- LLM provider ---
 # "ollama" (local, free, the default), "openai-compatible" (OpenAI, LM Studio,

@@ -1,0 +1,29 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  agent:
+    build: .
+    depends_on:
+      ollama:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Override the .env localhost value: inside the compose network the host
+      # is the service name, not localhost.
+      LLM_BASE_URL: http://ollama:11434
+    volumes:
+      - ./logs:/app/logs
+
+volumes:
+  ollama-models:

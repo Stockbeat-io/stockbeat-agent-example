@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import random
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -100,7 +101,10 @@ def _default_client():
                                      dry_run=config.DRY_RUN)
         client.connect()
         return client
-    except Exception as exc:
+    except (Exception, asyncio.CancelledError) as exc:
+        # CancelledError subclasses BaseException, not Exception, so a hung or
+        # cancelled MCP handshake would otherwise escape this handler and kill
+        # the run — precisely the case the REST fallback exists for.
         log.info("MCP | fallback to REST client: %s", exc)
         return StockbeatClient(config.STOCKBEAT_API_KEY,
                                config.STOCKBEAT_BASE_URL,

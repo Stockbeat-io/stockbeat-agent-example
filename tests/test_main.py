@@ -342,3 +342,26 @@ def test_full_run_with_agent_profile(monkeypatch):
 
     log_dir = config.agent_log_dir()
     assert "macro-example" in str(log_dir)
+
+
+def test_default_client_falls_back_when_mcp_connect_is_cancelled(monkeypatch):
+    """A cancelled MCP handshake must fall back to REST, not kill the run.
+
+    asyncio.CancelledError subclasses BaseException rather than Exception, so a
+    bare `except Exception` silently fails to catch it — which is exactly the
+    hung-endpoint case the fallback was written for.
+    """
+    import asyncio
+
+    class HangingClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        def connect(self):
+            raise asyncio.CancelledError("cancelled via cancel scope")
+
+    monkeypatch.setattr("execution.mcp_client.McpStockbeatClient", HangingClient)
+
+    client = main._default_client()
+
+    assert client.__class__.__name__ == "StockbeatClient"

@@ -325,15 +325,20 @@ def test_full_run_with_agent_profile(monkeypatch):
     monkeypatch.setattr(config, "POSITION_PCT_DEFAULT", config.POSITION_PCT_DEFAULT)
     monkeypatch.setattr(config, "STOP_LOSS_DEFAULT_PCT", config.STOP_LOSS_DEFAULT_PCT)
 
-    main._apply_agent_profile("steady-eddie")
+    # The hardened loader now raises ValueError when the env var is missing,
+    # so we must set it before calling _apply_agent_profile.
+    monkeypatch.setenv("STOCKBEAT_API_KEY_MACRO_EXAMPLE", "sk_test_macro")
 
-    assert config.AGENT_NAME == "steady-eddie"
-    assert "Steady Eddie" in config.AGENT_PERSONA
+    main._apply_agent_profile("macro-example")
+
+    assert config.AGENT_NAME == "macro-example"
+    # macro-example persona starts with "You start every analysis from the top down."
+    assert "top down" in config.AGENT_PERSONA
     assert config.CASH_TARGET_DEFAULT == 35
-    assert config.POSITION_PCT_DEFAULT == 8
+    assert config.POSITION_PCT_DEFAULT == 11
 
     mem_dir = config.agent_memory_dir()
-    assert "steady-eddie" in str(mem_dir)
+    assert "macro-example" in str(mem_dir)
 
     log_dir = config.agent_log_dir()
-    assert "steady-eddie" in str(log_dir)
+    assert "macro-example" in str(log_dir)

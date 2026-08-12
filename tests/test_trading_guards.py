@@ -182,8 +182,11 @@ def test_held_days_tolerates_a_bad_run_date(tmp_path):
     assert main._held_days(tmp_path / "none.jsonl", "not-a-date") == {}
 
 
-def test_profiles_carry_a_holding_floor_matching_their_horizon():
+def test_profiles_carry_a_holding_floor_matching_their_horizon(monkeypatch):
     from profiles import load_profile
-    # a swing trader stays nimble; a 60-90 day investor cannot flip overnight
-    assert load_profile("swing-sue")["risk_overrides"]["min_holding_days"] == 2
-    assert load_profile("strict-stu")["risk_overrides"]["min_holding_days"] == 15
+    # a short-horizon sentiment agent stays nimble; a long-horizon macro agent
+    # cannot flip overnight — min_holding_days must vary by strategy
+    monkeypatch.setenv("STOCKBEAT_API_KEY_SENTIMENT_EXAMPLE", "k")
+    monkeypatch.setenv("STOCKBEAT_API_KEY_MACRO_EXAMPLE", "k")
+    assert load_profile("sentiment-example")["risk_overrides"]["min_holding_days"] == 2
+    assert load_profile("macro-example")["risk_overrides"]["min_holding_days"] == 7

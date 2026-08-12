@@ -71,8 +71,5 @@ def test_stockbeat_base_url_defaults_to_public_host(monkeypatch):
 def test_no_internal_hosts_in_config():
     """Internal infrastructure hostnames must not ship publicly."""
     source = Path(config.__file__).read_text()
-    # Check that cloud-infrastructure and old internal hostnames are absent.
-    # Strings are split here so this file does not itself trigger the same scan.
-    banned = ["app" + "spot.com", "stockbeat" + ".app"]
-    for host in banned:
+    for host in ("appspot.com", "stockbeat.app"):
         assert host not in source, f"Internal host {host!r} found in config.py"

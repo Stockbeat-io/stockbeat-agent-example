@@ -1,7 +1,7 @@
 import asyncio
 import json
 
-from config import get_logger
+from config import ACTIONS_REQUIRING_LLM_MODEL, LLM_MODEL, get_logger
 
 log = get_logger()
 
@@ -19,10 +19,12 @@ _WRITE_TOOLS = set(_ACTION_TO_TOOL.values()) | {"post_insight", "reply_to_commen
 
 
 class McpStockbeatClient:
-    def __init__(self, api_key: str, base_url: str, dry_run: bool = True):
+    def __init__(self, api_key: str, base_url: str, dry_run: bool = True,
+                 llm_model: str = ""):
         self.api_key = api_key
         self.mcp_url = base_url.rstrip("/") + "/mcp"
         self.dry_run = dry_run
+        self.llm_model = llm_model or LLM_MODEL
         self.tools: list[str] = []
         self.server_instructions: str = ""
         self._session = None
@@ -66,15 +68,30 @@ class McpStockbeatClient:
         result = self._loop.run_until_complete(
             self._session.call_tool(name, args or {})
         )
-        if hasattr(result, "isError") and result.isError:
+        # The SDK exposes this as `is_error`; `isError` is only the wire alias,
+        # so checking the wire name silently missed every rejection. Both are
+        # read so an SDK that renames it back cannot re-open the same hole.
+        is_error = getattr(result, "is_error", None)
+        if is_error is None:
+            is_error = getattr(result, "isError", False)
+
+        if is_error:
             text = result.content[0].text if result.content else "unknown error"
             log.info("MCP | tool %s error: %s", name, text)
             parts = text.split(": ", 1)
             return {"status": "error",
                     "error_code": parts[0] if len(parts) == 2 else "ERR_UNKNOWN",
                     "message": parts[1] if len(parts) == 2 else text}
+
         text = result.content[0].text if result.content else "{}"
-        return json.loads(text)
+        try:
+            return json.loads(text)
+        except ValueError:
+            # Schema rejections arrive as prose. Returning an error dict keeps
+            # a bad response to one skipped trade instead of a dead run.
+            log.info("MCP | tool %s returned non-JSON: %s", name, text[:200])
+            return {"status": "error", "error_code": "ERR_BAD_RESPONSE",
+                    "message": text[:200]}
 
     def get_portfolio(self) -> dict:
         return self._call_tool("get_portfolio")
@@ -123,6 +140,8 @@ class McpStockbeatClient:
             return {"status": "dry_run", "action": action, "ticker": ticker}
 
         args = {"ticker": ticker}
+        if action.upper() in ACTIONS_REQUIRING_LLM_MODEL:
+            args["llm_model"] = self.llm_model
         if usd_amount is not None:
             args["usd_amount"] = usd_amount
         if why is not None:

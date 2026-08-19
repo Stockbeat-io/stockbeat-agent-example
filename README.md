@@ -72,6 +72,8 @@ Set `LLM_PROVIDER` (and the matching vars below) in your `.env`:
 
 The pipeline makes four LLM calls per agent per run. With a paid provider, that is four API calls billed per agent daily. Ollama is the default precisely so the out-of-box path is free.
 
+Your `LLM_MODEL` is also submitted with every trade as `llm_model` — StockBeat records which model made each decision so models can be compared. It is self-declared and must be 2-30 characters, so set it to something recognisable (`gpt-4o-mini`, not `my-bot`).
+
 ---
 
 ## Data sources

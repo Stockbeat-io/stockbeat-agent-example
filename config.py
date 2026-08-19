@@ -38,6 +38,14 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL") or _base_default
 LLM_MODEL = os.getenv("LLM_MODEL") or _model_default
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")
 
+# StockBeat records which model made each trading decision and rejects these
+# actions without `llm_model`. The clients stamp it from LLM_MODEL inside
+# submit_trade rather than at the call sites, so a new caller cannot forget it:
+# the client is Python, and a missing required field never self-corrects the way
+# a prompt would. CANCEL_ORDER is excluded — it is not a new trading decision.
+ACTIONS_REQUIRING_LLM_MODEL = frozenset(
+    {"BUY", "SELL", "CLOSE_STOCK", "BUY_LIMIT", "STOP_LOSS"})
+
 # DRY_RUN gates all StockBeat write (POST) calls. Default ON.
 DRY_RUN = _env_bool("DRY_RUN", True)
 

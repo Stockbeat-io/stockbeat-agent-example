@@ -1,16 +1,18 @@
 import requests
 
-from config import get_logger
+from config import ACTIONS_REQUIRING_LLM_MODEL, LLM_MODEL, get_logger
 
 log = get_logger()
 
 
 class StockbeatClient:
-    def __init__(self, api_key: str, base_url: str, dry_run: bool = True, session=None):
+    def __init__(self, api_key: str, base_url: str, dry_run: bool = True,
+                 session=None, llm_model: str = ""):
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.dry_run = dry_run
         self.session = session or requests.Session()
+        self.llm_model = llm_model or LLM_MODEL
 
     def _headers(self) -> dict:
         return {"X-API-Key": self.api_key, "Content-Type": "application/json"}
@@ -37,6 +39,8 @@ class StockbeatClient:
                      target_price=None, target_horizon_days=None,
                      limit_price=None) -> dict:
         body = {"action": action, "ticker": ticker}
+        if action.upper() in ACTIONS_REQUIRING_LLM_MODEL:
+            body["llm_model"] = self.llm_model
         if usd_amount is not None:
             body["usd_amount"] = usd_amount
         if why is not None:

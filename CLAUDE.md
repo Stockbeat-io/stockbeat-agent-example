@@ -111,9 +111,33 @@ chemicals company. If you edit the example, the guard follows it automatically.
 ## Tech Stack
 
 - Python 3.10+
-- LLM: Ollama is the default (local, free). OpenAI-compatible and Anthropic backends are also supported via `LLM_PROVIDER`.
+- LLM: Ollama is the default (local, free). OpenAI-compatible, Anthropic, and
+  `claude-cli` backends are also supported via `LLM_PROVIDER`.
 - Dependencies: yfinance, requests, fredapi
 - No LangGraph, no langchain, no heavy frameworks
+
+### The `claude-cli` provider
+
+`ClaudeCLIClient` shells out to the Claude Code CLI (`-p --output-format json`)
+so a Pro/Max subscription works without an API key — the credential is an OAuth
+token the CLI owns, which is why it is a sibling of the HTTP clients rather than
+a subclass. `build_client` exempts everything in `_NO_API_KEY_NEEDED` from the
+`LLM_API_KEY` check: Ollama is local, and the CLI holds its own token.
+
+Two details there are load-bearing and look wrong to a passing reader:
+
+- **Never add `--bare`.** It restricts auth to `ANTHROPIC_API_KEY` and never
+  reads the OAuth login, which is the only credential a subscription has.
+- **Check `is_error` on the parsed payload, not `subtype`.** On an API error the
+  CLI sets `is_error: true` while `subtype` still reads `"success"`, and puts an
+  English apology in `result`. Returning that unchecked feeds the pipeline an
+  apology as if it were an analyst report — the same way an MCP schema rejection
+  arrives as prose rather than JSON.
+
+Calls run with `--setting-sources ""`, `--strict-mcp-config` and `--tools ""` so
+a run launched from this repo does not inherit its `CLAUDE.md`, MCP servers or
+tool definitions. That is not just hygiene: dropping the tool definitions
+measured a per-call prompt drop from ~17k tokens to ~6.4k.
 
 ## Environment Variables (.env)
 
@@ -128,7 +152,8 @@ FRED_API_KEY=
 ```
 
 Set one `STOCKBEAT_API_KEY_<PROFILE_NAME_UPPER>` per profile. The `LLM_API_KEY`
-is not needed when `LLM_PROVIDER=ollama`.
+is not needed when `LLM_PROVIDER` is `ollama` or `claude-cli`; `LLM_BASE_URL` is
+unused by `claude-cli`.
 
 ## Conventions
 

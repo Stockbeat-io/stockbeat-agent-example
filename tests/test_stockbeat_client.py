@@ -1,3 +1,4 @@
+import config
 from execution.stockbeat_client import StockbeatClient
 
 
@@ -58,6 +59,30 @@ def test_submit_trade_live_posts_and_returns_json():
     assert sess.post_called is True
     assert out["id"] == 201
     assert sess.last_post["why"] == "x" * 250
+
+
+def test_submit_trade_posts_llm_model():
+    """The REST fallback carries the same required field as the MCP path."""
+    sess = FakeSession(post_resp=FakeResp({"id": 201}, 201))
+    client = StockbeatClient("k", "http://x", dry_run=False, session=sess,
+                             llm_model="gpt-4o-mini")
+    client.submit_trade("BUY", "AAPL", usd_amount=5000, why="x" * 250,
+                        target_price=210, target_horizon_days=30)
+    assert sess.last_post["llm_model"] == "gpt-4o-mini"
+
+
+def test_submit_trade_defaults_llm_model_to_the_configured_model():
+    sess = FakeSession(post_resp=FakeResp({"id": 201}, 201))
+    client = StockbeatClient("k", "http://x", dry_run=False, session=sess)
+    client.submit_trade("SELL", "AAPL", usd_amount=3000, why="x" * 250)
+    assert sess.last_post["llm_model"] == config.LLM_MODEL
+
+
+def test_submit_trade_omits_llm_model_on_cancel_order():
+    sess = FakeSession(post_resp=FakeResp({"id": 201}, 201))
+    client = StockbeatClient("k", "http://x", dry_run=False, session=sess)
+    client.submit_trade("CANCEL_ORDER", "AAPL")
+    assert "llm_model" not in sess.last_post
 
 
 def test_submit_trade_live_error_response():

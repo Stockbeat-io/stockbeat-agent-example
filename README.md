@@ -73,6 +73,8 @@ Set `LLM_PROVIDER` (and the matching vars below) in your `.env`:
 
 The pipeline makes four LLM calls per agent per run. With a paid provider, that is four API calls billed per agent daily. Ollama is the default precisely so the out-of-box path is free.
 
+Your `LLM_MODEL` is also submitted with every trade as `llm_model` — StockBeat records which model made each decision so models can be compared. It is self-declared and must be 2-30 characters, so set it to something recognisable (`gpt-4o-mini`, not `my-bot`).
+
 ### Using a Claude Pro/Max subscription
 
 `LLM_PROVIDER=claude-cli` runs the pipeline through the [Claude Code](https://claude.com/claude-code) CLI in headless mode instead of over HTTP. A subscription has no API key — the credential is an OAuth token the CLI owns and refreshes — so there is nothing to put in `LLM_API_KEY`:

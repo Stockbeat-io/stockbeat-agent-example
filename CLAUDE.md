@@ -81,8 +81,23 @@ conversion lives in `memory.memory._trading_days`.
 - `target_price`: required for BUY and BUY_LIMIT. Must be > entry price, ≤ 2.5x entry price
 - `target_horizon_days`: required for BUY and BUY_LIMIT. Positive integer
 - `usd_amount`: minimum $1,000
+- `llm_model`: required for BUY/SELL/CLOSE_STOCK/BUY_LIMIT and new STOP_LOSS
+  placements. 2-30 chars, `[A-Za-z0-9 ._:/+()-]`. Optional on a stop-loss
+  *update*, absent on CANCEL_ORDER
 - Auth: `X-API-Key: sk_live_...` header
 - Trades during market hours execute immediately; after hours → PENDING → MOO next day
+
+**Required fields are the client's job, not the LLM's.** Both clients stamp
+`llm_model` from `config.LLM_MODEL` inside `submit_trade`, driven by
+`config.ACTIONS_REQUIRING_LLM_MODEL`, so no call site can omit it and the value
+follows whichever provider is configured. When the platform adds a required
+field, add it there — a Python client never self-corrects the way a prompt does.
+
+`mcp_client._call_tool` must stay tolerant of both: the MCP SDK names the error
+flag `is_error` in Python and `isError` only on the wire, and a schema rejection
+arrives as prose, not JSON. Reading only the wire name and calling `json.loads`
+on prose turns every rejection into a crash that kills the run before it writes
+its report or logs its decisions.
 
 ### Risk Rules (hard-coded in validator.py, NOT LLM-dependent)
 - Position size clamped to 5-20% of total equity

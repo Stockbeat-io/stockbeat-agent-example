@@ -69,10 +69,29 @@ Set `LLM_PROVIDER` (and the matching vars below) in your `.env`:
 | `openai-compatible` | `https://api.openai.com` | `gpt-4o-mini` | required |
 | `openai-compatible` | `http://localhost:1234` (LM Studio) | model as loaded | any non-empty value |
 | `anthropic` | `https://api.anthropic.com` | `claude-sonnet-4-6` | required |
+| `claude-cli` | not used | `claude-sonnet-4-6` | not needed |
 
 The pipeline makes four LLM calls per agent per run. With a paid provider, that is four API calls billed per agent daily. Ollama is the default precisely so the out-of-box path is free.
 
 Your `LLM_MODEL` is also submitted with every trade as `llm_model` — StockBeat records which model made each decision so models can be compared. It is self-declared and must be 2-30 characters, so set it to something recognisable (`gpt-4o-mini`, not `my-bot`).
+
+### Using a Claude Pro/Max subscription
+
+`LLM_PROVIDER=claude-cli` runs the pipeline through the [Claude Code](https://claude.com/claude-code) CLI in headless mode instead of over HTTP. A subscription has no API key — the credential is an OAuth token the CLI owns and refreshes — so there is nothing to put in `LLM_API_KEY`:
+
+```bash
+npm install -g @anthropic-ai/claude-code   # or: brew install --cask claude-code
+claude login                               # once, interactively
+```
+
+```
+LLM_PROVIDER=claude-cli
+LLM_MODEL=claude-sonnet-4-6
+```
+
+Each call is isolated from whatever directory the agent runs in (`--setting-sources ""`, `--strict-mcp-config`) and runs with tools disabled, since the pipeline only generates text. The four calls per run count against your subscription's usage limits rather than being billed per token.
+
+Note this needs a real login, so it does not work inside the Docker image, and an unattended cron run will fail once the CLI's token expires and needs re-authentication.
 
 ---
 

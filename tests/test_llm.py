@@ -1,8 +1,12 @@
+import subprocess
+import types
+
 import pytest
 
 import config
 from analysis.llm import (
     AnthropicClient,
+    ClaudeCLIClient,
     OllamaClient,
     OpenAICompatClient,
     build_client,
@@ -121,6 +125,139 @@ def test_malformed_response_returns_empty():
     assert OllamaClient("http://x", "m", session=sess).generate("hi") == ""
 
 
+# --- Claude CLI (Pro/Max subscription, no API key) ---
+
+class FakeRunner:
+    """Stands in for subprocess.run. Records argv and stdin."""
+
+    def __init__(self, stdout='{"result": "cli says"}', returncode=0, stderr=""):
+        self._stdout = stdout
+        self._returncode = returncode
+        self._stderr = stderr
+        self.cmd = None
+        self.stdin = None
+        self.timeout = None
+
+    def __call__(self, cmd, input=None, capture_output=None, text=None, timeout=None):
+        self.cmd = cmd
+        self.stdin = input
+        self.timeout = timeout
+        return types.SimpleNamespace(
+            returncode=self._returncode, stdout=self._stdout, stderr=self._stderr
+        )
+
+
+def flag_value(cmd, flag):
+    """Return the argument following `flag`, or None if the flag is absent."""
+    return cmd[cmd.index(flag) + 1] if flag in cmd else None
+
+
+def test_claude_cli_returns_result_field():
+    runner = FakeRunner()
+    client = ClaudeCLIClient("", "claude-opus-4-8", runner=runner)
+    assert client.generate("hi", system="be terse") == "cli says"
+    assert runner.cmd[0] == "claude"
+    assert "-p" in runner.cmd
+    assert flag_value(runner.cmd, "--output-format") == "json"
+    assert flag_value(runner.cmd, "--model") == "claude-opus-4-8"
+
+
+def test_claude_cli_sends_prompt_on_stdin_not_argv():
+    """Analyst reports are far too long for argv; they must go on stdin."""
+    runner = FakeRunner()
+    ClaudeCLIClient("", "m", runner=runner).generate("a very long prompt")
+    assert runner.stdin == "a very long prompt"
+    assert "a very long prompt" not in runner.cmd
+
+
+def test_claude_cli_passes_system_as_append_system_prompt():
+    runner = FakeRunner()
+    ClaudeCLIClient("", "m", runner=runner).generate("hi", system="be terse")
+    assert flag_value(runner.cmd, "--append-system-prompt") == "be terse"
+
+
+def test_claude_cli_omits_system_flag_when_absent():
+    runner = FakeRunner()
+    ClaudeCLIClient("", "m", runner=runner).generate("hi")
+    assert "--append-system-prompt" not in runner.cmd
+
+
+def test_claude_cli_isolates_from_repo_settings():
+    """A cron run inside the repo must not inherit CLAUDE.md or MCP servers."""
+    runner = FakeRunner()
+    ClaudeCLIClient("", "m", runner=runner).generate("hi")
+    assert "--strict-mcp-config" in runner.cmd
+    assert flag_value(runner.cmd, "--setting-sources") == ""
+
+
+def test_claude_cli_never_passes_bare():
+    """--bare forces API-key auth and ignores the OAuth login entirely."""
+    runner = FakeRunner()
+    ClaudeCLIClient("", "m", runner=runner).generate("hi")
+    assert "--bare" not in runner.cmd
+
+
+def test_claude_cli_disables_tools():
+    """The pipeline only generates text; tool definitions are dead prompt weight.
+
+    Measured against the real CLI, dropping them cut the per-call prompt from
+    ~17k tokens to ~6.4k.
+    """
+    runner = FakeRunner()
+    ClaudeCLIClient("", "m", runner=runner).generate("hi")
+    assert flag_value(runner.cmd, "--tools") == ""
+
+
+def test_claude_cli_empty_when_is_error_set():
+    """An API error still yields exit 0 + parseable JSON on some paths.
+
+    `result` then holds an English apology, and `subtype` is *still* "success",
+    so `is_error` is the only trustworthy signal. Returning that prose would
+    feed the pipeline an apology as if it were an analyst report.
+    """
+    runner = FakeRunner(
+        stdout='{"subtype": "success", "is_error": true,'
+               ' "result": "There is an issue with the selected model."}'
+    )
+    assert ClaudeCLIClient("", "m", runner=runner).generate("hi") == ""
+
+
+def test_claude_cli_empty_on_nonzero_exit():
+    runner = FakeRunner(stdout="", returncode=1, stderr="not logged in")
+    assert ClaudeCLIClient("", "m", runner=runner).generate("hi") == ""
+
+
+def test_claude_cli_empty_on_timeout():
+    def boom(*a, **kw):
+        raise subprocess.TimeoutExpired(cmd="claude", timeout=1)
+
+    assert ClaudeCLIClient("", "m", runner=boom).generate("hi") == ""
+
+
+def test_claude_cli_empty_when_binary_missing():
+    def boom(*a, **kw):
+        raise FileNotFoundError("claude")
+
+    assert ClaudeCLIClient("", "m", runner=boom).generate("hi") == ""
+
+
+def test_claude_cli_empty_on_non_json_output():
+    """A CLI that printed a warning instead of JSON must not raise."""
+    runner = FakeRunner(stdout="Usage: claude [options]")
+    assert ClaudeCLIClient("", "m", runner=runner).generate("hi") == ""
+
+
+def test_claude_cli_empty_on_json_without_result():
+    runner = FakeRunner(stdout='{"unexpected": "shape"}')
+    assert ClaudeCLIClient("", "m", runner=runner).generate("hi") == ""
+
+
+def test_claude_cli_passes_timeout_to_runner():
+    runner = FakeRunner()
+    ClaudeCLIClient("", "m", runner=runner, timeout=300).generate("hi")
+    assert runner.timeout == 300
+
+
 # --- Factory ---
 
 def test_build_client_defaults_to_ollama(monkeypatch):
@@ -164,6 +301,25 @@ def test_build_client_missing_model_raises(monkeypatch):
     monkeypatch.setattr(config, "LLM_API_KEY", "k")
     with pytest.raises(ValueError, match="LLM_MODEL is required"):
         build_client()
+
+
+def test_build_client_claude_cli(monkeypatch):
+    monkeypatch.setattr(config, "LLM_PROVIDER", "claude-cli")
+    monkeypatch.setattr(config, "LLM_BASE_URL", "")
+    monkeypatch.setattr(config, "LLM_MODEL", "claude-opus-4-8")
+    monkeypatch.setattr(config, "LLM_API_KEY", "")
+    client = build_client()
+    assert isinstance(client, ClaudeCLIClient)
+    assert client.model == "claude-opus-4-8"
+
+
+def test_build_client_claude_cli_needs_no_api_key(monkeypatch):
+    """The subscription credential lives in the CLI, so there is no key to set."""
+    monkeypatch.setattr(config, "LLM_PROVIDER", "claude-cli")
+    monkeypatch.setattr(config, "LLM_BASE_URL", "")
+    monkeypatch.setattr(config, "LLM_MODEL", "claude-opus-4-8")
+    monkeypatch.setattr(config, "LLM_API_KEY", "")
+    assert build_client() is not None
 
 
 def test_build_client_missing_api_key_raises(monkeypatch):

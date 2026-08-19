@@ -23,14 +23,21 @@ STOCKBEAT_BASE_URL = os.getenv("STOCKBEAT_BASE_URL", "https://stockbeat.io")
 
 # --- LLM provider ---
 # "ollama" (local, free, the default), "openai-compatible" (OpenAI, LM Studio,
-# vLLM, Groq, OpenRouter, Together — they differ only in base_url), "anthropic".
+# vLLM, Groq, OpenRouter, Together — they differ only in base_url), "anthropic"
+# (pay-as-you-go API key), "claude-cli" (shells out to an already-logged-in
+# Claude Code CLI, so a Pro/Max subscription works with no API key at all).
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 
+# claude-cli takes no base_url — it does not speak HTTP. Its model default is a
+# full id rather than an alias like "sonnet" because LLM_MODEL is also what gets
+# stamped into StockBeat's `llm_model` field, where "sonnet" would record
+# nothing useful about which model actually made the call.
 _PROVIDER_DEFAULTS = {
     "ollama": ("http://localhost:11434", "mistral:7b"),
     "openai-compatible": ("https://api.openai.com", ""),
     "anthropic": ("https://api.anthropic.com", "claude-sonnet-4-6"),
+    "claude-cli": ("", "claude-sonnet-4-6"),
 }
 _base_default, _model_default = _PROVIDER_DEFAULTS.get(LLM_PROVIDER, ("", ""))
 

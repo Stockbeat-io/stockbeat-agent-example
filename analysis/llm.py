@@ -1,3 +1,5 @@
+import json
+import subprocess
 from typing import Protocol
 
 import requests
@@ -133,11 +135,85 @@ class AnthropicClient(_HTTPClient):
         return data["content"][0]["text"]
 
 
+class ClaudeCLIClient:
+    """Claude Code CLI in headless mode — for a Pro/Max subscription.
+
+    A subscription has no API key: the credential is an OAuth token the CLI
+    owns and refreshes itself, so there is no header to build and nothing for
+    `_HTTPClient` to send. That is why this is a sibling of the HTTP clients
+    rather than a subclass — it shells out instead of making a request.
+
+    `base_url`, `api_key` and `session` are accepted and ignored so the class
+    stays drop-in for `build_client`, which constructs every provider the same
+    way.
+    """
+
+    def __init__(self, base_url: str, model: str, api_key: str = "",
+                 session=None, timeout: int = 300, runner=subprocess.run):
+        self.model = model
+        self.timeout = timeout
+        self._run = runner
+
+    def _command(self, system: str | None) -> list[str]:
+        # --setting-sources and --strict-mcp-config keep a run launched from the
+        # repo out of this project's CLAUDE.md and MCP servers: cost and latency
+        # for four text-generation calls that need neither. --tools "" drops the
+        # built-in tool definitions for the same reason — measured against the
+        # real CLI it took the per-call prompt from ~17k tokens to ~6.4k.
+        #
+        # Never add --bare here. It looks right for a scripted run, but it
+        # restricts auth to ANTHROPIC_API_KEY and never reads the OAuth login,
+        # which is the only credential a subscription has.
+        cmd = ["claude", "-p", "--output-format", "json",
+               "--strict-mcp-config", "--setting-sources", "", "--tools", ""]
+        if self.model:
+            cmd += ["--model", self.model]
+        if system:
+            cmd += ["--append-system-prompt", system]
+        return cmd
+
+    def generate(self, prompt: str, system: str | None = None) -> str:
+        """Same contract as _HTTPClient.generate: never raises, "" on failure."""
+        try:
+            # The prompt goes on stdin, not argv — an analyst report plus a
+            # bull/bear exchange runs well past a comfortable argument length.
+            proc = self._run(
+                self._command(system),
+                input=prompt,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+            )
+            if proc.returncode != 0:
+                log.info("LLM | claude CLI exit %s: %s",
+                         proc.returncode, (proc.stderr or "")[:200])
+                return ""
+            payload = json.loads(proc.stdout)
+            # An API error can still parse as JSON, and `subtype` reads
+            # "success" even then — `is_error` is the only honest signal. Its
+            # `result` is an English apology, so returning it unchecked would
+            # hand the pipeline an apology as if it were an analyst report.
+            if payload.get("is_error"):
+                log.info("LLM | claude CLI reported an error (status %s): %s",
+                         payload.get("api_error_status"),
+                         str(payload.get("result", ""))[:200])
+                return ""
+            return payload["result"]
+        except Exception as exc:
+            log.info("LLM | generate failed: %s", exc)
+            return ""
+
+
 _PROVIDERS = {
     "ollama": OllamaClient,
     "openai-compatible": OpenAICompatClient,
     "anthropic": AnthropicClient,
+    "claude-cli": ClaudeCLIClient,
 }
+
+# Providers that carry their own credential and need no LLM_API_KEY: Ollama is
+# local, and the Claude CLI holds a subscription OAuth token.
+_NO_API_KEY_NEEDED = (OllamaClient, ClaudeCLIClient)
 
 
 def build_client(session=None) -> LLMClient:
@@ -160,7 +236,7 @@ def build_client(session=None) -> LLMClient:
             f"LLM_MODEL is required for LLM_PROVIDER={provider!r}. "
             "Set it in .env (for example LLM_MODEL=gpt-4o-mini)."
         )
-    if cls is not OllamaClient and not config.LLM_API_KEY:
+    if cls not in _NO_API_KEY_NEEDED and not config.LLM_API_KEY:
         raise ValueError(
             f"LLM_API_KEY is required for LLM_PROVIDER={provider!r}. Set it in .env."
         )

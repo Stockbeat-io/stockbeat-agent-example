@@ -38,6 +38,10 @@ _PROVIDER_DEFAULTS = {
     "openai-compatible": ("https://api.openai.com", ""),
     "anthropic": ("https://api.anthropic.com", "claude-sonnet-4-6"),
     "claude-cli": ("", "claude-sonnet-4-6"),
+    # No model default on purpose: Cursor's model IDs vary by account, and
+    # LLM_MODEL is what gets stamped onto every trade as `llm_model`. Guessing
+    # would either fail mid-run or record a lie about which model decided.
+    "cursor-cli": ("", ""),
 }
 _base_default, _model_default = _PROVIDER_DEFAULTS.get(LLM_PROVIDER, ("", ""))
 

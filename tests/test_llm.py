@@ -7,6 +7,7 @@ import config
 from analysis.llm import (
     AnthropicClient,
     ClaudeCLIClient,
+    CursorCLIClient,
     OllamaClient,
     OpenAICompatClient,
     build_client,
@@ -349,4 +350,119 @@ def test_build_client_missing_api_key_raises(monkeypatch):
     monkeypatch.setattr(config, "LLM_MODEL", "claude-sonnet-4-6")
     monkeypatch.setattr(config, "LLM_API_KEY", "")
     with pytest.raises(ValueError, match="LLM_API_KEY is required"):
+        build_client()
+
+
+# --- Cursor CLI (Cursor subscription, no API key) ---
+# Every assertion here encodes Cursor's *documented* behaviour. Nothing in this
+# section has been checked against a live binary.
+
+def test_cursor_cli_returns_result_field():
+    runner = FakeRunner(
+        stdout='{"type": "result", "subtype": "success", "is_error": false,'
+               ' "result": "cursor says", "session_id": "abc"}'
+    )
+    client = CursorCLIClient("", "composer-1", runner=runner)
+    assert client.generate("hi") == "cursor says"
+    assert runner.cmd[0] == "cursor-agent"
+    assert "-p" in runner.cmd
+    assert flag_value(runner.cmd, "--output-format") == "json"
+    assert flag_value(runner.cmd, "--model") == "composer-1"
+
+
+def test_cursor_cli_sends_prompt_on_argv_not_stdin():
+    """Cursor documents prompts as arguments only and says nothing about stdin.
+
+    macOS ARG_MAX is ~1MB, so a tens-of-KB analyst prompt fits comfortably.
+    Following the only documented behaviour beats a uniform contract that
+    cannot be tested here.
+    """
+    runner = FakeRunner(stdout='{"is_error": false, "result": "x"}')
+    CursorCLIClient("", "m", runner=runner).generate("a very long prompt")
+    assert runner.cmd[-1] == "a very long prompt"
+    assert runner.stdin is None
+
+
+def test_cursor_cli_folds_system_into_the_prompt():
+    """Cursor documents no --append-system-prompt equivalent."""
+    runner = FakeRunner(stdout='{"is_error": false, "result": "x"}')
+    CursorCLIClient("", "m", runner=runner).generate("hi", system="be terse")
+    assert runner.cmd[-1] == "be terse\n\nhi"
+
+
+def test_cursor_cli_runs_read_only():
+    """--mode ask is Cursor's --tools "": Q&A, no edits. The pipeline only
+    generates text, so --force/--yolo must never appear."""
+    runner = FakeRunner(stdout='{"is_error": false, "result": "x"}')
+    CursorCLIClient("", "m", runner=runner).generate("hi")
+    assert flag_value(runner.cmd, "--mode") == "ask"
+    assert "--force" not in runner.cmd
+    assert "--yolo" not in runner.cmd
+
+
+def test_cursor_cli_points_workspace_at_the_isolated_dir(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "cli_workspace_dir", lambda: tmp_path)
+    runner = FakeRunner(stdout='{"is_error": false, "result": "x"}')
+    CursorCLIClient("", "m", runner=runner).generate("hi")
+    assert flag_value(runner.cmd, "--workspace") == str(tmp_path)
+
+
+def test_cursor_cli_omits_model_flag_when_unset():
+    runner = FakeRunner(stdout='{"is_error": false, "result": "x"}')
+    CursorCLIClient("", "", runner=runner).generate("hi")
+    assert "--model" not in runner.cmd
+
+
+def test_cursor_cli_empty_when_is_error_set():
+    """Same trap as Claude: `subtype` still reads "success" on an API error."""
+    runner = FakeRunner(
+        stdout='{"subtype": "success", "is_error": true,'
+               ' "result": "Sorry, something went wrong."}'
+    )
+    assert CursorCLIClient("", "m", runner=runner).generate("hi") == ""
+
+
+def test_cursor_cli_empty_on_nonzero_exit():
+    runner = FakeRunner(stdout="", returncode=1, stderr="not logged in")
+    assert CursorCLIClient("", "m", runner=runner).generate("hi") == ""
+
+
+def test_cursor_cli_empty_on_non_json_output():
+    runner = FakeRunner(stdout="Usage: cursor-agent [options]")
+    assert CursorCLIClient("", "m", runner=runner).generate("hi") == ""
+
+
+def test_cursor_cli_empty_when_binary_missing():
+    def boom(*a, **kw):
+        raise FileNotFoundError("cursor-agent")
+
+    assert CursorCLIClient("", "m", runner=boom).generate("hi") == ""
+
+
+def test_cursor_cli_empty_on_timeout():
+    def boom(*a, **kw):
+        raise subprocess.TimeoutExpired(cmd="cursor-agent", timeout=1)
+
+    assert CursorCLIClient("", "m", runner=boom).generate("hi") == ""
+
+
+def test_build_client_cursor_cli_needs_no_api_key(monkeypatch):
+    monkeypatch.setattr(config, "LLM_PROVIDER", "cursor-cli")
+    monkeypatch.setattr(config, "LLM_BASE_URL", "")
+    monkeypatch.setattr(config, "LLM_MODEL", "composer-1")
+    monkeypatch.setattr(config, "LLM_API_KEY", "")
+    client = build_client()
+    assert isinstance(client, CursorCLIClient)
+    assert client.model == "composer-1"
+
+
+def test_build_client_cursor_cli_requires_an_explicit_model(monkeypatch):
+    """Cursor's model IDs vary by account, and LLM_MODEL is stamped onto every
+    trade as `llm_model`. A guessed default would record a lie about which
+    model made a trading decision, so there is no default."""
+    monkeypatch.setattr(config, "LLM_PROVIDER", "cursor-cli")
+    monkeypatch.setattr(config, "LLM_BASE_URL", "")
+    monkeypatch.setattr(config, "LLM_MODEL", "")
+    monkeypatch.setattr(config, "LLM_API_KEY", "")
+    with pytest.raises(ValueError, match="--list-models"):
         build_client()

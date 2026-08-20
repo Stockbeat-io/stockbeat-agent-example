@@ -249,11 +249,50 @@ class ClaudeCLIClient(_CLIClient):
         return _json_result(stdout)
 
 
+class CursorCLIClient(_CLIClient):
+    """Cursor CLI in print mode — for a Cursor subscription.
+
+    NOT VERIFIED against a live binary. Every flag and the output shape below
+    come from Cursor's documentation, unlike ClaudeCLIClient which was built
+    against the real CLI.
+
+    Cursor emits the same `{is_error, result}` payload Claude Code does, so the
+    parsing is shared. Two things differ and look like mistakes if you skim:
+    the prompt goes in **argv**, because Cursor documents no stdin path; and the
+    binary defaults to `cursor-agent`, which newer installs also expose as
+    `agent` — set LLM_CLI_BINARY if yours is the short name.
+    """
+
+    BINARY = "cursor-agent"
+
+    def _command(self, text, system):
+        # --mode ask is Cursor's equivalent of Claude's --tools "": read-only
+        # Q&A, no file edits. --force/--yolo must never appear here — the
+        # pipeline generates text and has no business touching a filesystem.
+        cmd = [self._binary(), "-p", "--output-format", "json",
+               "--mode", "ask",
+               "--workspace", str(config.cli_workspace_dir())]
+        if self.model:
+            cmd += ["--model", self.model]
+        cmd.append(text)
+        return cmd
+
+    def _prompt_text(self, prompt, system):
+        return _with_system(prompt, system)
+
+    def _stdin(self, text):
+        return None
+
+    def _parse(self, stdout):
+        return _json_result(stdout)
+
+
 _PROVIDERS = {
     "ollama": OllamaClient,
     "openai-compatible": OpenAICompatClient,
     "anthropic": AnthropicClient,
     "claude-cli": ClaudeCLIClient,
+    "cursor-cli": CursorCLIClient,
 }
 
 def _needs_api_key(cls) -> bool:
@@ -263,6 +302,12 @@ def _needs_api_key(cls) -> bool:
     construction and cannot forget to register itself.
     """
     return not (cls is OllamaClient or issubclass(cls, _CLIClient))
+
+
+# Per-provider hints for the "LLM_MODEL is required" error.
+_MODEL_HINTS = {
+    "cursor-cli": "run `cursor-agent --list-models` to see the ones your plan has",
+}
 
 
 def build_client(session=None) -> LLMClient:
@@ -281,9 +326,10 @@ def build_client(session=None) -> LLMClient:
             f"Expected one of: {', '.join(sorted(_PROVIDERS))}"
         )
     if not config.LLM_MODEL:
+        hint = _MODEL_HINTS.get(provider, "for example LLM_MODEL=gpt-4o-mini")
         raise ValueError(
             f"LLM_MODEL is required for LLM_PROVIDER={provider!r}. "
-            "Set it in .env (for example LLM_MODEL=gpt-4o-mini)."
+            f"Set it in .env ({hint})."
         )
     if _needs_api_key(cls) and not config.LLM_API_KEY:
         raise ValueError(

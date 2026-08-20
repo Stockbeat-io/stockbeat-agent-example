@@ -30,12 +30,33 @@ The agent runs once per day and walks through seven stages:
 git clone https://github.com/stockbeat-io/stockbeat-agent-example.git
 cd stockbeat-agent-example
 ./setup.sh
-ollama pull mistral
 cp .env.example .env         # then add your StockBeat API key
+```
+
+### Pick your LLM
+
+The agent needs a model to think with. Pick the row matching a credential you
+already have, run its setup line, and set those two values in `.env`:
+
+| You already have | One-time setup | Set in `.env` |
+|---|---|---|
+| Claude Pro/Max | `claude login` | `LLM_PROVIDER=claude-cli`<br>`LLM_MODEL=claude-sonnet-4-6` |
+| ChatGPT Plus/Pro | `codex login` | `LLM_PROVIDER=codex-cli`<br>`LLM_MODEL=gpt-5.1-codex-max` |
+| Cursor Pro | `cursor-agent login` | `LLM_PROVIDER=cursor-cli`<br>`LLM_MODEL=composer-1` |
+| An OpenAI API key | — | `LLM_PROVIDER=openai-compatible`<br>`LLM_API_KEY=sk-…`<br>`LLM_MODEL=gpt-4o-mini` |
+| None of the above | `ollama pull llama3.1` | `LLM_PROVIDER=ollama`<br>`LLM_MODEL=llama3.1` |
+
+Each row is a starting point, not a recommendation — see [Choosing an LLM](#choosing-an-llm) for the full set, including Anthropic API keys and LM Studio. `llama3.1` is just an example; any Ollama model works, so pick one that suits your hardware.
+
+Then run it:
+
+```bash
 ./.venv/bin/python main.py --agent technical-example
 ```
 
 This runs in dry-run mode and prints the trades the agent intends to make without submitting them to StockBeat.
+
+**If it proposes no trades, check the log before assuming the agent was cautious.** A misconfigured or unreachable LLM makes the run complete normally with zero actions — the pipeline treats an empty response as "no signal" rather than crashing. A line reading `LLM | generate failed` in `logs/<agent>/<date>.log` means the provider is the problem, not the market.
 
 ---
 
@@ -65,7 +86,7 @@ Set `LLM_PROVIDER` (and the matching vars below) in your `.env`:
 
 | `LLM_PROVIDER` | `LLM_BASE_URL` | `LLM_MODEL` example | `LLM_API_KEY` |
 |---|---|---|---|
-| `ollama` (default) | `http://localhost:11434` | `mistral:7b` | not needed |
+| `ollama` | `http://localhost:11434` | `llama3.1` | not needed |
 | `openai-compatible` | `https://api.openai.com` | `gpt-4o-mini` | required |
 | `openai-compatible` | `http://localhost:1234` (LM Studio) | model as loaded | any non-empty value |
 | `anthropic` | `https://api.anthropic.com` | `claude-sonnet-4-6` | required |
@@ -73,7 +94,11 @@ Set `LLM_PROVIDER` (and the matching vars below) in your `.env`:
 | `cursor-cli` | not used | required, see below | not needed |
 | `codex-cli` | not used | `gpt-5.1-codex-max` | not needed |
 
-The pipeline makes four LLM calls per agent per run. With a paid provider, that is four API calls billed per agent daily. Ollama is the default precisely so the out-of-box path is free.
+The pipeline makes four LLM calls per agent per run. With a pay-as-you-go API key, that is four calls billed per agent daily; with a subscription CLI they count against your plan's usage limits instead; with Ollama they cost nothing.
+
+`ollama` is what the agent falls back to if you set no `LLM_PROVIDER` at all, and it is the only option that needs neither a key nor a subscription. It is not the recommended path, though. A local model large enough to reason well about a portfolio wants roughly 8-16GB of free RAM, and smaller ones are noticeably weaker at this task — this repo carries `validator.echoes_example()` specifically because a small local model copied the few-shot rationale out of the prompt verbatim into 30 live trades, including cloud-revenue reasoning for a chemicals company.
+
+Two considerations that cut the other way, in favour of Ollama or an API key: the three subscription CLIs need an interactive login, so they **do not work in the Docker image**, and an unattended cron run through one will fail once its token expires. For a daily agent left to run on its own, that matters more than the setup convenience.
 
 Your `LLM_MODEL` is also submitted with every trade as `llm_model` — StockBeat records which model made each decision so models can be compared. It is self-declared and must be 2-30 characters, so set it to something recognisable (`gpt-4o-mini`, not `my-bot`).
 

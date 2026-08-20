@@ -42,6 +42,7 @@ _PROVIDER_DEFAULTS = {
     # LLM_MODEL is what gets stamped onto every trade as `llm_model`. Guessing
     # would either fail mid-run or record a lie about which model decided.
     "cursor-cli": ("", ""),
+    "codex-cli": ("", "gpt-5.1-codex-max"),
 }
 _base_default, _model_default = _PROVIDER_DEFAULTS.get(LLM_PROVIDER, ("", ""))
 

@@ -91,3 +91,24 @@ def test_llm_cli_binary_defaults_to_empty(monkeypatch):
     monkeypatch.delenv("LLM_CLI_BINARY", raising=False)
     monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **kw: None)
     assert importlib.reload(config).LLM_CLI_BINARY == ""
+
+
+def test_cli_providers_take_no_base_url():
+    """None of the CLI providers speak HTTP, so a base_url would be a lie."""
+    for provider in ("claude-cli", "cursor-cli", "codex-cli"):
+        base, _ = config._PROVIDER_DEFAULTS[provider]
+        assert base == "", f"{provider} should have no default base URL"
+
+
+def test_cursor_cli_has_no_default_model():
+    """Cursor's model IDs vary by account and LLM_MODEL is stamped onto every
+    trade, so build_client must demand an explicit one."""
+    assert config._PROVIDER_DEFAULTS["cursor-cli"][1] == ""
+
+
+def test_codex_cli_default_model_fits_the_llm_model_field():
+    """StockBeat requires 2-30 chars matching [A-Za-z0-9 ._:/+()-]."""
+    import re
+    model = config._PROVIDER_DEFAULTS["codex-cli"][1]
+    assert 2 <= len(model) <= 30
+    assert re.fullmatch(r"[A-Za-z0-9 ._:/+()-]+", model)

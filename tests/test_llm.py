@@ -7,6 +7,7 @@ import config
 from analysis.llm import (
     AnthropicClient,
     ClaudeCLIClient,
+    CodexCLIClient,
     CursorCLIClient,
     OllamaClient,
     OpenAICompatClient,
@@ -466,3 +467,99 @@ def test_build_client_cursor_cli_requires_an_explicit_model(monkeypatch):
     monkeypatch.setattr(config, "LLM_API_KEY", "")
     with pytest.raises(ValueError, match="--list-models"):
         build_client()
+
+
+# --- Codex CLI (ChatGPT subscription, no API key) ---
+# Documented behaviour only; not checked against a live binary.
+
+def test_codex_cli_returns_stdout_verbatim():
+    """codex exec streams progress to stderr and prints only the final agent
+    message to stdout, so stdout *is* the answer — there is nothing to parse."""
+    runner = FakeRunner(stdout="codex says\n", stderr="thinking...\ntool call\n")
+    client = CodexCLIClient("", "gpt-5.1-codex-max", runner=runner)
+    assert client.generate("hi") == "codex says"
+    assert runner.cmd[0] == "codex"
+    assert runner.cmd[1] == "exec"
+    assert flag_value(runner.cmd, "-m") == "gpt-5.1-codex-max"
+
+
+def test_codex_cli_non_json_stdout_is_a_success_not_a_parse_failure():
+    """The inverse of the Claude/Cursor trap: prose here is the expected shape.
+
+    Adding --json would turn stdout into a JSONL event stream and break this.
+    """
+    runner = FakeRunner(stdout="Prose, not JSON. Deliberately.")
+    assert CodexCLIClient("", "m", runner=runner).generate("hi") == (
+        "Prose, not JSON. Deliberately.")
+
+
+def test_codex_cli_sends_prompt_on_stdin_not_argv():
+    runner = FakeRunner(stdout="ok")
+    CodexCLIClient("", "m", runner=runner).generate("a very long prompt")
+    assert runner.stdin == "a very long prompt"
+    assert "a very long prompt" not in runner.cmd
+    # `-` forces reading the prompt from stdin.
+    assert runner.cmd[-1] == "-"
+
+
+def test_codex_cli_folds_system_into_the_prompt():
+    """codex exec documents no --append-system-prompt equivalent."""
+    runner = FakeRunner(stdout="ok")
+    CodexCLIClient("", "m", runner=runner).generate("hi", system="be terse")
+    assert runner.stdin == "be terse\n\nhi"
+
+
+def test_codex_cli_runs_read_only_and_outside_a_repo():
+    runner = FakeRunner(stdout="ok")
+    CodexCLIClient("", "m", runner=runner).generate("hi")
+    assert flag_value(runner.cmd, "--sandbox") == "read-only"
+    assert "--skip-git-repo-check" in runner.cmd
+
+
+def test_codex_cli_never_passes_json():
+    """--json makes stdout a JSONL event stream, breaking the stdout contract."""
+    runner = FakeRunner(stdout="ok")
+    CodexCLIClient("", "m", runner=runner).generate("hi")
+    assert "--json" not in runner.cmd
+
+
+def test_codex_cli_points_cd_at_the_isolated_dir(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "cli_workspace_dir", lambda: tmp_path)
+    runner = FakeRunner(stdout="ok")
+    CodexCLIClient("", "m", runner=runner).generate("hi")
+    assert flag_value(runner.cmd, "--cd") == str(tmp_path)
+
+
+def test_codex_cli_omits_model_flag_when_unset():
+    runner = FakeRunner(stdout="ok")
+    CodexCLIClient("", "", runner=runner).generate("hi")
+    assert "-m" not in runner.cmd
+
+
+def test_codex_cli_empty_on_nonzero_exit():
+    runner = FakeRunner(stdout="", returncode=1, stderr="not logged in")
+    assert CodexCLIClient("", "m", runner=runner).generate("hi") == ""
+
+
+def test_codex_cli_empty_when_binary_missing():
+    def boom(*a, **kw):
+        raise FileNotFoundError("codex")
+
+    assert CodexCLIClient("", "m", runner=boom).generate("hi") == ""
+
+
+def test_codex_cli_empty_on_timeout():
+    def boom(*a, **kw):
+        raise subprocess.TimeoutExpired(cmd="codex", timeout=1)
+
+    assert CodexCLIClient("", "m", runner=boom).generate("hi") == ""
+
+
+def test_build_client_codex_cli_needs_no_api_key(monkeypatch):
+    monkeypatch.setattr(config, "LLM_PROVIDER", "codex-cli")
+    monkeypatch.setattr(config, "LLM_BASE_URL", "")
+    monkeypatch.setattr(config, "LLM_MODEL", "gpt-5.1-codex-max")
+    monkeypatch.setattr(config, "LLM_API_KEY", "")
+    client = build_client()
+    assert isinstance(client, CodexCLIClient)
+    assert client.model == "gpt-5.1-codex-max"

@@ -294,12 +294,43 @@ class CursorCLIClient(_CLIClient):
         return _json_result(stdout)
 
 
+class CodexCLIClient(_CLIClient):
+    """Codex CLI in non-interactive mode — for a ChatGPT subscription.
+
+    NOT VERIFIED against a live binary; the flags come from OpenAI's docs.
+
+    The simplest of the three: `codex exec` streams progress to stderr and
+    prints only the final agent message to stdout, so the base `_parse` is
+    already correct and there is no JSON to unpack. Never add --json — it turns
+    stdout into a JSONL event stream and breaks exactly that.
+    """
+
+    BINARY = "codex"
+
+    def _command(self, text, system):
+        # read-only sandbox for the same reason Claude gets --tools "": the
+        # pipeline generates text. --skip-git-repo-check because the workspace
+        # is a bare directory, and --cd keeps AGENTS.md out of the prompt.
+        cmd = [self._binary(), "exec",
+               "--sandbox", "read-only",
+               "--skip-git-repo-check",
+               "--cd", str(config.cli_workspace_dir())]
+        if self.model:
+            cmd += ["-m", self.model]
+        cmd.append("-")  # force reading the prompt from stdin
+        return cmd
+
+    def _prompt_text(self, prompt, system):
+        return _with_system(prompt, system)
+
+
 _PROVIDERS = {
     "ollama": OllamaClient,
     "openai-compatible": OpenAICompatClient,
     "anthropic": AnthropicClient,
     "claude-cli": ClaudeCLIClient,
     "cursor-cli": CursorCLIClient,
+    "codex-cli": CodexCLIClient,
 }
 
 def _needs_api_key(cls) -> bool:

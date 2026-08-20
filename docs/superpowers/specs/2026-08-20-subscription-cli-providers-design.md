@@ -1,7 +1,8 @@
 # Subscription CLI providers: Cursor and Codex
 
 **Date:** 2026-08-20
-**Status:** Approved, not yet implemented
+**Status:** Implemented on `feat/cursor-codex-cli-providers` (369 tests passing).
+Both new providers remain unverified against a live binary — see below.
 
 ## Context
 

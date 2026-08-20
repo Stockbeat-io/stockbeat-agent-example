@@ -11,6 +11,8 @@ from analysis.llm import (
     CursorCLIClient,
     OllamaClient,
     OpenAICompatClient,
+    _CLIClient,
+    _needs_api_key,
     build_client,
 )
 
@@ -374,14 +376,24 @@ def test_cursor_cli_returns_result_field():
 def test_cursor_cli_sends_prompt_on_argv_not_stdin():
     """Cursor documents prompts as arguments only and says nothing about stdin.
 
-    macOS ARG_MAX is ~1MB, so a tens-of-KB analyst prompt fits comfortably.
-    Following the only documented behaviour beats a uniform contract that
-    cannot be tested here.
+    On Linux (the deployment target) the binding limit is MAX_ARG_STRLEN =
+    128 KiB per single argument. Real prompts land at 10-25 KB, giving a
+    ~5-10x margin. Following the only documented behaviour beats a uniform
+    contract that cannot be tested here.
     """
     runner = FakeRunner(stdout='{"is_error": false, "result": "x"}')
     CursorCLIClient("", "m", runner=runner).generate("a very long prompt")
     assert runner.cmd[-1] == "a very long prompt"
     assert runner.stdin is None
+
+
+def test_cursor_cli_double_dash_before_prompt():
+    """A -- terminator separates flags from the prompt so a prompt beginning
+    with '-' cannot be parsed as a flag by the shell."""
+    runner = FakeRunner(stdout='{"is_error": false, "result": "x"}')
+    CursorCLIClient("", "m", runner=runner).generate("a very long prompt")
+    prompt_index = runner.cmd.index("a very long prompt")
+    assert runner.cmd[prompt_index - 1] == "--"
 
 
 def test_cursor_cli_folds_system_into_the_prompt():
@@ -563,3 +575,24 @@ def test_build_client_codex_cli_needs_no_api_key(monkeypatch):
     client = build_client()
     assert isinstance(client, CodexCLIClient)
     assert client.model == "gpt-5.1-codex-max"
+
+
+# --- _needs_api_key: by-construction exemption ---
+
+def test_needs_api_key_is_false_for_any_cli_client_subclass():
+    """Any _CLIClient subclass is exempt by construction — no manual registration.
+
+    This pins the predicate so the next CLI provider cannot silently break it by
+    subclassing _HTTPClient by mistake (which would trigger a confusing
+    'LLM_API_KEY is required' error for a provider with no key).
+    """
+    class _ThrowawayCliClient(_CLIClient):
+        BINARY = "throwaway"
+
+    assert _needs_api_key(_ThrowawayCliClient) is False
+
+
+def test_needs_api_key_is_true_for_non_cli_non_ollama_client():
+    """HTTP providers that are not Ollama do require an API key."""
+    assert _needs_api_key(AnthropicClient) is True
+    assert _needs_api_key(OpenAICompatClient) is True

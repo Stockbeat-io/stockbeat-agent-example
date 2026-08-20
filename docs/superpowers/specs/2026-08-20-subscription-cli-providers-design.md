@@ -100,12 +100,18 @@ codex        exec --sandbox read-only --skip-git-repo-check \
 Two deliberate choices:
 
 - **Cursor takes the prompt on argv**, diverging from the other two. Cursor's
-  docs only ever show prompts as arguments and say nothing about stdin. macOS
-  `ARG_MAX` is ~1MB, so a tens-of-KB analyst prompt fits comfortably. Following
-  the only documented behaviour beats a uniform contract we cannot test.
-- **`--mode ask` and `--sandbox read-only` are Cursor's and Codex's `--tools ""`.**
-  The pipeline only generates text. `--force` / `--yolo` is never passed to
-  Cursor, and Codex is never taken out of its read-only sandbox.
+  docs only ever show prompts as arguments and say nothing about stdin. On Linux
+  (the deployment target) the binding limit is `MAX_ARG_STRLEN` = 128 KiB per
+  single argument; real prompts land at 10-25 KB, giving a ~5-10x margin.
+  Following the only documented behaviour beats a uniform contract we cannot test.
+- **`--mode ask` and `--sandbox read-only` are the closest available equivalents
+  to Claude's `--tools ""`**, but they are not equivalent. `--tools ""` removes
+  tool definitions from the prompt (measured: ~17k→6.4k tokens for Claude).
+  `--mode ask` and `--sandbox read-only` restrict writes while leaving the model
+  able to read the filesystem and still paying for tool definitions — the prompt
+  reduction does not transfer. The pipeline only generates text. `--force` /
+  `--yolo` is never passed to Cursor, and Codex is never taken out of its
+  read-only sandbox.
 
 Neither new CLI documents a system-prompt flag, so `system` is prepended into
 the prompt text as `f"{system}\n\n{prompt}"`.

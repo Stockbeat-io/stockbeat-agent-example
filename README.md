@@ -135,7 +135,7 @@ Cursor renamed its binary from `cursor-agent` to `agent` and kept both working. 
 
 - They need a real interactive login, so **none of them work inside the Docker image**, and an unattended cron run will fail once the CLI's token expires and needs re-authentication.
 - `LLM_CLI_BINARY` overrides the binary name or gives an absolute path, for any of them.
-- **`cursor-cli` and `codex-cli` were written from vendor documentation and have not been verified against a live binary** — unlike `claude-cli`, which was built against the real CLI. If a flag has moved, `generate()` returns `""` and the run safely does nothing rather than trading on a broken response. Reports welcome.
+- **`cursor-cli` and `codex-cli` were written from vendor documentation and have not been verified against a live binary** — unlike `claude-cli`, which was built against the real CLI. If a flag has moved, `generate()` returns `""` and the run safely does nothing rather than trading on a broken response. Reports welcome. Note: all three CLI providers use a 300-second timeout; `codex exec` is an agentic loop that may plan and read files before replying, so the first real `codex-cli` user should verify whether 300s is sufficient for their workload.
 
 ---
 
@@ -244,7 +244,7 @@ data/
   screener.py          — S&P 500 screener (pure math, no LLM)
   enrichment.py        — assembles per-candidate data dicts
 analysis/
-  llm.py               — LLM client (Ollama, OpenAI-compatible, Anthropic)
+  llm.py               — LLM clients (HTTP: Ollama/OpenAI-compatible/Anthropic; CLI: claude/cursor/codex)
   prompts.py           — prompt templates for all four LLM calls
   pipeline.py          — Analyst → Bull → Bear → Judge orchestration
 execution/

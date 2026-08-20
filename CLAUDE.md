@@ -48,7 +48,7 @@ data/
   enrichment.py        — assembles per-candidate data dicts
 analysis/
   prompts.py           — prompt templates for all 4 LLM calls
-  llm.py               — LLM client (Ollama, OpenAI-compatible, Anthropic)
+  llm.py               — LLM clients (HTTP: Ollama/OpenAI-compatible/Anthropic; CLI: claude/cursor/codex)
   pipeline.py          — Analyst → Bull → Bear → Judge orchestration
 execution/
   mcp_client.py        — MCP-based StockBeat client (auto-discovers tools via /mcp)
@@ -153,7 +153,10 @@ Two details there are load-bearing and look wrong to a passing reader:
 Calls run with `--setting-sources ""`, `--strict-mcp-config` and `--tools ""` so
 a run launched from this repo does not inherit its `CLAUDE.md`, MCP servers or
 tool definitions. That is not just hygiene: dropping the tool definitions
-measured a per-call prompt drop from ~17k tokens to ~6.4k.
+measured a per-call prompt drop from ~17k tokens to ~6.4k. `cursor-cli` uses
+`--mode ask` and `codex-cli` uses `--sandbox read-only` as the closest available
+equivalents, but they restrict writes rather than removing tool definitions, so
+the prompt reduction does not transfer.
 
 All three share `_CLIClient`, which owns the subprocess transport the way
 `_HTTPClient` owns the HTTP one. Each subclass supplies argv, prompt routing
@@ -162,16 +165,21 @@ and parsing. `_needs_api_key` exempts every `_CLIClient` subclass from the
 register itself.
 
 All three run with `cwd` set to `config.cli_workspace_dir()`, an empty
-directory. Codex reads `AGENTS.md` and Cursor reads `.cursor/rules` from the
-working directory; neither has a flag to disable that, so they get pointed
-somewhere with nothing in it. User-global config still applies.
+directory under `~/.stockbeat-agent/cli-workspace`. Codex reads `AGENTS.md`
+and Cursor reads `.cursor/rules` from the working directory; neither has a flag
+to disable that, so they get pointed somewhere with nothing in it. User-global
+config still applies. Known limitation: `--cd`/`--workspace` points at
+`~/.stockbeat-agent/cli-workspace`, whose parent (`~/.stockbeat-agent/`) contains
+each agent's `memory/decisions.jsonl`. A read-only-sandboxed CLI can still read
+those files; they are not secrets, but it is worth knowing.
 
 `cursor-cli` and `codex-cli` were written from vendor docs and **have not been
 run against a live binary.** Three details there look wrong to a passing reader:
 
 - **Cursor takes the prompt in argv, not stdin**, unlike its two siblings.
-  Cursor documents no stdin path. macOS `ARG_MAX` is ~1MB, so a tens-of-KB
-  analyst prompt fits.
+  Cursor documents no stdin path. On Linux (the deployment target) the binding
+  limit is `MAX_ARG_STRLEN` = 128 KiB per single argument; real prompts are
+  10-25 KB, giving ~5-10x margin.
 - **Never add `--json` to `codex exec`.** `codex exec` streams progress to
   stderr and prints only the final message to stdout, which is why
   `CodexCLIClient` needs no parser. `--json` turns stdout into a JSONL event

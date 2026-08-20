@@ -140,7 +140,7 @@ def _with_system(prompt: str, system: str | None) -> str:
     return f"{system}\n\n{prompt}" if system else prompt
 
 
-def _json_result(stdout: str) -> str:
+def _json_result(stdout: str, binary: str) -> str:
     """Parse the `{is_error, result}` payload Claude Code and Cursor both emit.
 
     An API error can still parse as JSON, and `subtype` reads "success" even
@@ -150,7 +150,8 @@ def _json_result(stdout: str) -> str:
     """
     payload = json.loads(stdout)
     if payload.get("is_error"):
-        log.info("LLM | CLI reported an error (status %s): %s",
+        log.info("LLM | %s reported an error (status %s): %s",
+                 binary,
                  payload.get("api_error_status"),
                  str(payload.get("result", ""))[:200])
         return ""
@@ -250,7 +251,7 @@ class ClaudeCLIClient(_CLIClient):
         return cmd
 
     def _parse(self, stdout):
-        return _json_result(stdout)
+        return _json_result(stdout, self._binary())
 
 
 class CursorCLIClient(_CLIClient):
@@ -265,6 +266,11 @@ class CursorCLIClient(_CLIClient):
     the prompt goes in **argv**, because Cursor documents no stdin path; and the
     binary defaults to `cursor-agent`, which newer installs also expose as
     `agent` — set LLM_CLI_BINARY if yours is the short name.
+
+    On Linux (the deployment target) the binding limit is MAX_ARG_STRLEN = 128 KiB
+    per single argument, not ARG_MAX. Real prompts land at 10-25 KB, so the
+    margin is ~5-10x. On macOS ARG_MAX is ~1 MB (a ~50x margin), but that is
+    not the deployment target.
     """
 
     BINARY = "cursor-agent"
@@ -273,15 +279,18 @@ class CursorCLIClient(_CLIClient):
         # `system` is already folded into `text` by _prompt_text — Cursor
         # documents no --append-system-prompt equivalent. Do not re-add it here.
         #
-        # --mode ask is Cursor's equivalent of Claude's --tools "": read-only
-        # Q&A, no file edits. --force/--yolo must never appear here — the
-        # pipeline generates text and has no business touching a filesystem.
+        # --mode ask is the closest available equivalent to Claude's --tools "".
+        # Unlike --tools "", which removes tool definitions from the prompt,
+        # --mode ask restricts writes while leaving the model able to read the
+        # filesystem and still paying for the tool definitions. The ~17k→6.4k
+        # per-call prompt reduction measured for Claude does not transfer here.
+        # --force/--yolo must never appear — the pipeline generates text only.
         cmd = [self._binary(), "-p", "--output-format", "json",
                "--mode", "ask",
                "--workspace", str(config.cli_workspace_dir())]
         if self.model:
             cmd += ["--model", self.model]
-        cmd.append(text)
+        cmd += ["--", text]
         return cmd
 
     def _prompt_text(self, prompt, system):
@@ -291,7 +300,7 @@ class CursorCLIClient(_CLIClient):
         return None
 
     def _parse(self, stdout):
-        return _json_result(stdout)
+        return _json_result(stdout, self._binary())
 
 
 class CodexCLIClient(_CLIClient):
@@ -308,9 +317,12 @@ class CodexCLIClient(_CLIClient):
     BINARY = "codex"
 
     def _command(self, text, system):
-        # read-only sandbox for the same reason Claude gets --tools "": the
-        # pipeline generates text. --skip-git-repo-check because the workspace
-        # is a bare directory, and --cd keeps AGENTS.md out of the prompt.
+        # --sandbox read-only is the closest available equivalent to Claude's
+        # --tools "": codex exec has no flag to remove tool definitions, so this
+        # restricts writes rather than removing them. The ~17k→6.4k per-call
+        # prompt reduction measured for Claude does not transfer here.
+        # --skip-git-repo-check because the workspace is a bare directory, and
+        # --cd keeps AGENTS.md out of the prompt.
         cmd = [self._binary(), "exec",
                "--sandbox", "read-only",
                "--skip-git-repo-check",
@@ -333,6 +345,7 @@ _PROVIDERS = {
     "codex-cli": CodexCLIClient,
 }
 
+
 def _needs_api_key(cls) -> bool:
     """Ollama is local; every CLI provider carries its own credential.
 
@@ -344,7 +357,10 @@ def _needs_api_key(cls) -> bool:
 
 # Per-provider hints for the "LLM_MODEL is required" error.
 _MODEL_HINTS = {
-    "cursor-cli": "run `cursor-agent --list-models` to see the ones your plan has",
+    "cursor-cli": (
+        f"run `{config.LLM_CLI_BINARY or 'cursor-agent'} --list-models`"
+        " to see the ones your plan has"
+    ),
 }
 
 

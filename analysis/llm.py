@@ -182,6 +182,10 @@ class _CLIClient:
         return config.LLM_CLI_BINARY or self.BINARY
 
     def _command(self, text: str, system: str | None) -> list[str]:
+        """Subclasses receive `text`, the prompt after _prompt_text has folded
+        in any system prompt. `system` is passed through as well and is only
+        useful to subclasses that have a dedicated system-prompt flag.
+        """
         raise NotImplementedError
 
     def _prompt_text(self, prompt: str, system: str | None) -> str:
@@ -266,6 +270,9 @@ class CursorCLIClient(_CLIClient):
     BINARY = "cursor-agent"
 
     def _command(self, text, system):
+        # `system` is already folded into `text` by _prompt_text — Cursor
+        # documents no --append-system-prompt equivalent. Do not re-add it here.
+        #
         # --mode ask is Cursor's equivalent of Claude's --tools "": read-only
         # Q&A, no file edits. --force/--yolo must never appear here — the
         # pipeline generates text and has no business touching a filesystem.

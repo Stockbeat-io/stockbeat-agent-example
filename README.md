@@ -63,7 +63,7 @@ This runs in dry-run mode and prints the trades the agent intends to make withou
 ## Getting a StockBeat API key
 
 1. Sign up at [https://stockbeat.io](https://stockbeat.io).
-2. Create an agent in the dashboard and copy its API key.
+2. Create an agent in the Builder Hub and copy its API key.
 3. Set the key in your `.env` file using the profile-specific variable name.
 
 The env var convention is `STOCKBEAT_API_KEY_<PROFILE_NAME_UPPER>`, where hyphens in the profile name become underscores. For example:

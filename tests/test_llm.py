@@ -7,8 +7,12 @@ import config
 from analysis.llm import (
     AnthropicClient,
     ClaudeCLIClient,
+    CodexCLIClient,
+    CursorCLIClient,
     OllamaClient,
     OpenAICompatClient,
+    _CLIClient,
+    _needs_api_key,
     build_client,
 )
 
@@ -137,11 +141,14 @@ class FakeRunner:
         self.cmd = None
         self.stdin = None
         self.timeout = None
+        self.cwd = None
 
-    def __call__(self, cmd, input=None, capture_output=None, text=None, timeout=None):
+    def __call__(self, cmd, input=None, capture_output=None, text=None,
+                 timeout=None, cwd=None):
         self.cmd = cmd
         self.stdin = input
         self.timeout = timeout
+        self.cwd = cwd
         return types.SimpleNamespace(
             returncode=self._returncode, stdout=self._stdout, stderr=self._stderr
         )
@@ -258,6 +265,24 @@ def test_claude_cli_passes_timeout_to_runner():
     assert runner.timeout == 300
 
 
+def test_cli_client_runs_in_an_isolated_workspace(monkeypatch, tmp_path):
+    """Codex and Cursor read agent config from the cwd; Claude inherits the
+    same isolation for free once the transport is shared."""
+    monkeypatch.setattr(config, "cli_workspace_dir", lambda: tmp_path)
+    runner = FakeRunner()
+    ClaudeCLIClient("", "m", runner=runner).generate("hi")
+    assert runner.cwd == str(tmp_path)
+
+
+def test_cli_binary_can_be_overridden(monkeypatch):
+    """Cursor's binary is `agent` on new installs and `cursor-agent` on old
+    ones, so the name cannot be hard-coded."""
+    monkeypatch.setattr(config, "LLM_CLI_BINARY", "/opt/custom/claude")
+    runner = FakeRunner()
+    ClaudeCLIClient("", "m", runner=runner).generate("hi")
+    assert runner.cmd[0] == "/opt/custom/claude"
+
+
 # --- Factory ---
 
 def test_build_client_defaults_to_ollama(monkeypatch):
@@ -329,3 +354,245 @@ def test_build_client_missing_api_key_raises(monkeypatch):
     monkeypatch.setattr(config, "LLM_API_KEY", "")
     with pytest.raises(ValueError, match="LLM_API_KEY is required"):
         build_client()
+
+
+# --- Cursor CLI (Cursor subscription, no API key) ---
+# Every assertion here encodes Cursor's *documented* behaviour. Nothing in this
+# section has been checked against a live binary.
+
+def test_cursor_cli_returns_result_field():
+    runner = FakeRunner(
+        stdout='{"type": "result", "subtype": "success", "is_error": false,'
+               ' "result": "cursor says", "session_id": "abc"}'
+    )
+    client = CursorCLIClient("", "composer-1", runner=runner)
+    assert client.generate("hi") == "cursor says"
+    assert runner.cmd[0] == "cursor-agent"
+    assert "-p" in runner.cmd
+    assert flag_value(runner.cmd, "--output-format") == "json"
+    assert flag_value(runner.cmd, "--model") == "composer-1"
+
+
+def test_cursor_cli_sends_prompt_on_argv_not_stdin():
+    """Cursor documents prompts as arguments only and says nothing about stdin.
+
+    On Linux (the deployment target) the binding limit is MAX_ARG_STRLEN =
+    128 KiB per single argument. Real prompts land at 10-25 KB, giving a
+    ~5-10x margin. Following the only documented behaviour beats a uniform
+    contract that cannot be tested here.
+    """
+    runner = FakeRunner(stdout='{"is_error": false, "result": "x"}')
+    CursorCLIClient("", "m", runner=runner).generate("a very long prompt")
+    assert runner.cmd[-1] == "a very long prompt"
+    assert runner.stdin is None
+
+
+def test_cursor_cli_double_dash_before_prompt():
+    """A -- terminator separates flags from the prompt so a prompt beginning
+    with '-' cannot be parsed as a flag by the shell."""
+    runner = FakeRunner(stdout='{"is_error": false, "result": "x"}')
+    CursorCLIClient("", "m", runner=runner).generate("a very long prompt")
+    prompt_index = runner.cmd.index("a very long prompt")
+    assert runner.cmd[prompt_index - 1] == "--"
+
+
+def test_cursor_cli_folds_system_into_the_prompt():
+    """Cursor documents no --append-system-prompt equivalent."""
+    runner = FakeRunner(stdout='{"is_error": false, "result": "x"}')
+    CursorCLIClient("", "m", runner=runner).generate("hi", system="be terse")
+    assert runner.cmd[-1] == "be terse\n\nhi"
+
+
+def test_cursor_cli_runs_read_only():
+    """--mode ask is Cursor's --tools "": Q&A, no edits. The pipeline only
+    generates text, so --force/--yolo must never appear."""
+    runner = FakeRunner(stdout='{"is_error": false, "result": "x"}')
+    CursorCLIClient("", "m", runner=runner).generate("hi")
+    assert flag_value(runner.cmd, "--mode") == "ask"
+    assert "--force" not in runner.cmd
+    assert "--yolo" not in runner.cmd
+
+
+def test_cursor_cli_points_workspace_at_the_isolated_dir(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "cli_workspace_dir", lambda: tmp_path)
+    runner = FakeRunner(stdout='{"is_error": false, "result": "x"}')
+    CursorCLIClient("", "m", runner=runner).generate("hi")
+    assert flag_value(runner.cmd, "--workspace") == str(tmp_path)
+
+
+def test_cursor_cli_omits_model_flag_when_unset():
+    runner = FakeRunner(stdout='{"is_error": false, "result": "x"}')
+    CursorCLIClient("", "", runner=runner).generate("hi")
+    assert "--model" not in runner.cmd
+
+
+def test_cursor_cli_empty_when_is_error_set():
+    """Same trap as Claude: `subtype` still reads "success" on an API error."""
+    runner = FakeRunner(
+        stdout='{"subtype": "success", "is_error": true,'
+               ' "result": "Sorry, something went wrong."}'
+    )
+    assert CursorCLIClient("", "m", runner=runner).generate("hi") == ""
+
+
+def test_cursor_cli_empty_on_nonzero_exit():
+    runner = FakeRunner(stdout="", returncode=1, stderr="not logged in")
+    assert CursorCLIClient("", "m", runner=runner).generate("hi") == ""
+
+
+def test_cursor_cli_empty_on_non_json_output():
+    runner = FakeRunner(stdout="Usage: cursor-agent [options]")
+    assert CursorCLIClient("", "m", runner=runner).generate("hi") == ""
+
+
+def test_cursor_cli_empty_when_binary_missing():
+    def boom(*a, **kw):
+        raise FileNotFoundError("cursor-agent")
+
+    assert CursorCLIClient("", "m", runner=boom).generate("hi") == ""
+
+
+def test_cursor_cli_empty_on_timeout():
+    def boom(*a, **kw):
+        raise subprocess.TimeoutExpired(cmd="cursor-agent", timeout=1)
+
+    assert CursorCLIClient("", "m", runner=boom).generate("hi") == ""
+
+
+def test_build_client_cursor_cli_needs_no_api_key(monkeypatch):
+    monkeypatch.setattr(config, "LLM_PROVIDER", "cursor-cli")
+    monkeypatch.setattr(config, "LLM_BASE_URL", "")
+    monkeypatch.setattr(config, "LLM_MODEL", "composer-1")
+    monkeypatch.setattr(config, "LLM_API_KEY", "")
+    client = build_client()
+    assert isinstance(client, CursorCLIClient)
+    assert client.model == "composer-1"
+
+
+def test_build_client_cursor_cli_requires_an_explicit_model(monkeypatch):
+    """Cursor's model IDs vary by account, and LLM_MODEL is stamped onto every
+    trade as `llm_model`. A guessed default would record a lie about which
+    model made a trading decision, so there is no default."""
+    monkeypatch.setattr(config, "LLM_PROVIDER", "cursor-cli")
+    monkeypatch.setattr(config, "LLM_BASE_URL", "")
+    monkeypatch.setattr(config, "LLM_MODEL", "")
+    monkeypatch.setattr(config, "LLM_API_KEY", "")
+    with pytest.raises(ValueError, match="--list-models"):
+        build_client()
+
+
+# --- Codex CLI (ChatGPT subscription, no API key) ---
+# Documented behaviour only; not checked against a live binary.
+
+def test_codex_cli_returns_stdout_verbatim():
+    """codex exec streams progress to stderr and prints only the final agent
+    message to stdout, so stdout *is* the answer — there is nothing to parse."""
+    runner = FakeRunner(stdout="codex says\n", stderr="thinking...\ntool call\n")
+    client = CodexCLIClient("", "gpt-5.1-codex-max", runner=runner)
+    assert client.generate("hi") == "codex says"
+    assert runner.cmd[0] == "codex"
+    assert runner.cmd[1] == "exec"
+    assert flag_value(runner.cmd, "-m") == "gpt-5.1-codex-max"
+
+
+def test_codex_cli_non_json_stdout_is_a_success_not_a_parse_failure():
+    """The inverse of the Claude/Cursor trap: prose here is the expected shape.
+
+    Adding --json would turn stdout into a JSONL event stream and break this.
+    """
+    runner = FakeRunner(stdout="Prose, not JSON. Deliberately.")
+    assert CodexCLIClient("", "m", runner=runner).generate("hi") == (
+        "Prose, not JSON. Deliberately.")
+
+
+def test_codex_cli_sends_prompt_on_stdin_not_argv():
+    runner = FakeRunner(stdout="ok")
+    CodexCLIClient("", "m", runner=runner).generate("a very long prompt")
+    assert runner.stdin == "a very long prompt"
+    assert "a very long prompt" not in runner.cmd
+    # `-` forces reading the prompt from stdin.
+    assert runner.cmd[-1] == "-"
+
+
+def test_codex_cli_folds_system_into_the_prompt():
+    """codex exec documents no --append-system-prompt equivalent."""
+    runner = FakeRunner(stdout="ok")
+    CodexCLIClient("", "m", runner=runner).generate("hi", system="be terse")
+    assert runner.stdin == "be terse\n\nhi"
+
+
+def test_codex_cli_runs_read_only_and_outside_a_repo():
+    runner = FakeRunner(stdout="ok")
+    CodexCLIClient("", "m", runner=runner).generate("hi")
+    assert flag_value(runner.cmd, "--sandbox") == "read-only"
+    assert "--skip-git-repo-check" in runner.cmd
+
+
+def test_codex_cli_never_passes_json():
+    """--json makes stdout a JSONL event stream, breaking the stdout contract."""
+    runner = FakeRunner(stdout="ok")
+    CodexCLIClient("", "m", runner=runner).generate("hi")
+    assert "--json" not in runner.cmd
+
+
+def test_codex_cli_points_cd_at_the_isolated_dir(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "cli_workspace_dir", lambda: tmp_path)
+    runner = FakeRunner(stdout="ok")
+    CodexCLIClient("", "m", runner=runner).generate("hi")
+    assert flag_value(runner.cmd, "--cd") == str(tmp_path)
+
+
+def test_codex_cli_omits_model_flag_when_unset():
+    runner = FakeRunner(stdout="ok")
+    CodexCLIClient("", "", runner=runner).generate("hi")
+    assert "-m" not in runner.cmd
+
+
+def test_codex_cli_empty_on_nonzero_exit():
+    runner = FakeRunner(stdout="", returncode=1, stderr="not logged in")
+    assert CodexCLIClient("", "m", runner=runner).generate("hi") == ""
+
+
+def test_codex_cli_empty_when_binary_missing():
+    def boom(*a, **kw):
+        raise FileNotFoundError("codex")
+
+    assert CodexCLIClient("", "m", runner=boom).generate("hi") == ""
+
+
+def test_codex_cli_empty_on_timeout():
+    def boom(*a, **kw):
+        raise subprocess.TimeoutExpired(cmd="codex", timeout=1)
+
+    assert CodexCLIClient("", "m", runner=boom).generate("hi") == ""
+
+
+def test_build_client_codex_cli_needs_no_api_key(monkeypatch):
+    monkeypatch.setattr(config, "LLM_PROVIDER", "codex-cli")
+    monkeypatch.setattr(config, "LLM_BASE_URL", "")
+    monkeypatch.setattr(config, "LLM_MODEL", "gpt-5.1-codex-max")
+    monkeypatch.setattr(config, "LLM_API_KEY", "")
+    client = build_client()
+    assert isinstance(client, CodexCLIClient)
+    assert client.model == "gpt-5.1-codex-max"
+
+
+# --- _needs_api_key: by-construction exemption ---
+
+def test_needs_api_key_is_false_for_any_cli_client_subclass():
+    """Any _CLIClient subclass is exempt by construction — no manual registration.
+
+    This pins the predicate so the next CLI provider cannot silently break it by
+    subclassing _HTTPClient by mistake (which would trigger a confusing
+    'LLM_API_KEY is required' error for a provider with no key).
+    """
+    class _ThrowawayCliClient(_CLIClient):
+        BINARY = "throwaway"
+
+    assert _needs_api_key(_ThrowawayCliClient) is False
+
+
+def test_needs_api_key_is_true_for_non_cli_non_ollama_client():
+    """HTTP providers that are not Ollama do require an API key."""
+    assert _needs_api_key(AnthropicClient) is True
+    assert _needs_api_key(OpenAICompatClient) is True

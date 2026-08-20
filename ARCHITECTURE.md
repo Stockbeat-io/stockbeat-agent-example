@@ -77,7 +77,7 @@ There is deliberately no provider protocol in `data/`. LLM backends are intercha
 
 ### Adding an LLM provider
 
-Add a subclass of `_HTTPClient` in `analysis/llm.py` and register it in `_PROVIDERS`. The only interface requirement is the `generate(prompt, system)` method defined by the `LLMClient` protocol.
+Providers that speak HTTP subclass `_HTTPClient`; providers that shell out to an already-logged-in CLI subclass `_CLIClient`. The distinction matters: `_needs_api_key` exempts every `_CLIClient` subclass from the `LLM_API_KEY` check automatically, so a CLI provider that subclasses `_HTTPClient` by mistake will produce a confusing "LLM_API_KEY is required" error for a provider that has no key. Register the new class in `_PROVIDERS`. The only interface requirement is the `generate(prompt, system)` method defined by the `LLMClient` protocol.
 
 `generate` must never raise. Transport or parse failures should log and return an empty string, allowing the pipeline to fall through to a no-trade outcome rather than aborting a scheduled run midway through a portfolio.
 

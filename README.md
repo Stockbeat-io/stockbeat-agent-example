@@ -70,6 +70,8 @@ Set `LLM_PROVIDER` (and the matching vars below) in your `.env`:
 | `openai-compatible` | `http://localhost:1234` (LM Studio) | model as loaded | any non-empty value |
 | `anthropic` | `https://api.anthropic.com` | `claude-sonnet-4-6` | required |
 | `claude-cli` | not used | `claude-sonnet-4-6` | not needed |
+| `cursor-cli` | not used | required, see below | not needed |
+| `codex-cli` | not used | `gpt-5.1-codex-max` | not needed |
 
 The pipeline makes four LLM calls per agent per run. With a paid provider, that is four API calls billed per agent daily. Ollama is the default precisely so the out-of-box path is free.
 
@@ -92,6 +94,48 @@ LLM_MODEL=claude-sonnet-4-6
 Each call is isolated from whatever directory the agent runs in (`--setting-sources ""`, `--strict-mcp-config`) and runs with tools disabled, since the pipeline only generates text. The four calls per run count against your subscription's usage limits rather than being billed per token.
 
 Note this needs a real login, so it does not work inside the Docker image, and an unattended cron run will fail once the CLI's token expires and needs re-authentication.
+
+### Using a ChatGPT subscription
+
+`LLM_PROVIDER=codex-cli` runs the pipeline through the [Codex](https://developers.openai.com/codex) CLI in non-interactive mode. Codex CLI usage is covered by a ChatGPT Plus/Pro plan under that plan's rate limits, so the four calls per run are not billed per token:
+
+```bash
+npm install -g @openai/codex
+codex login                                # once, interactively — choose "Sign in with ChatGPT"
+```
+
+```
+LLM_PROVIDER=codex-cli
+LLM_MODEL=gpt-5.1-codex-max
+```
+
+Each call runs `codex exec --sandbox read-only` in an empty directory, so the CLI cannot edit files and does not read this repo's `AGENTS.md`.
+
+### Using a Cursor subscription
+
+`LLM_PROVIDER=cursor-cli` runs the pipeline through the [Cursor CLI](https://cursor.com/docs/cli/overview) in print mode:
+
+```bash
+curl https://cursor.com/install -fsS | bash
+cursor-agent login                         # once, interactively
+```
+
+```
+LLM_PROVIDER=cursor-cli
+LLM_MODEL=composer-1                       # run `cursor-agent --list-models` for yours
+```
+
+There is no default model, on purpose: Cursor's model IDs vary by account, and `LLM_MODEL` is stamped onto every trade as `llm_model`, so a guessed default would record a lie about which model made the decision.
+
+**Cursor's economics differ from the other two.** A Cursor plan includes a credit pool roughly equal to the subscription price, and CLI runs draw it down like API usage rather than being flat-rate. Four calls per agent per day can reach overages; a ChatGPT plan covering Codex under rate limits is the closer fit for a daily agent.
+
+Cursor renamed its binary from `cursor-agent` to `agent` and kept both working. If yours is the short name, set `LLM_CLI_BINARY=agent`.
+
+### Caveats for all three CLI providers
+
+- They need a real interactive login, so **none of them work inside the Docker image**, and an unattended cron run will fail once the CLI's token expires and needs re-authentication.
+- `LLM_CLI_BINARY` overrides the binary name or gives an absolute path, for any of them.
+- **`cursor-cli` and `codex-cli` were written from vendor documentation and have not been verified against a live binary** — unlike `claude-cli`, which was built against the real CLI. If a flag has moved, `generate()` returns `""` and the run safely does nothing rather than trading on a broken response. Reports welcome. Note: all three CLI providers use a 300-second timeout; `codex exec` is an agentic loop that may plan and read files before replying, so the first real `codex-cli` user should verify whether 300s is sufficient for their workload.
 
 ---
 
@@ -200,7 +244,7 @@ data/
   screener.py          — S&P 500 screener (pure math, no LLM)
   enrichment.py        — assembles per-candidate data dicts
 analysis/
-  llm.py               — LLM client (Ollama, OpenAI-compatible, Anthropic)
+  llm.py               — LLM clients (HTTP: Ollama/OpenAI-compatible/Anthropic; CLI: claude/cursor/codex)
   prompts.py           — prompt templates for all four LLM calls
   pipeline.py          — Analyst → Bull → Bear → Judge orchestration
 execution/

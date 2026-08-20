@@ -137,11 +137,14 @@ class FakeRunner:
         self.cmd = None
         self.stdin = None
         self.timeout = None
+        self.cwd = None
 
-    def __call__(self, cmd, input=None, capture_output=None, text=None, timeout=None):
+    def __call__(self, cmd, input=None, capture_output=None, text=None,
+                 timeout=None, cwd=None):
         self.cmd = cmd
         self.stdin = input
         self.timeout = timeout
+        self.cwd = cwd
         return types.SimpleNamespace(
             returncode=self._returncode, stdout=self._stdout, stderr=self._stderr
         )
@@ -256,6 +259,24 @@ def test_claude_cli_passes_timeout_to_runner():
     runner = FakeRunner()
     ClaudeCLIClient("", "m", runner=runner, timeout=300).generate("hi")
     assert runner.timeout == 300
+
+
+def test_cli_client_runs_in_an_isolated_workspace(monkeypatch, tmp_path):
+    """Codex and Cursor read agent config from the cwd; Claude inherits the
+    same isolation for free once the transport is shared."""
+    monkeypatch.setattr(config, "cli_workspace_dir", lambda: tmp_path)
+    runner = FakeRunner()
+    ClaudeCLIClient("", "m", runner=runner).generate("hi")
+    assert runner.cwd == str(tmp_path)
+
+
+def test_cli_binary_can_be_overridden(monkeypatch):
+    """Cursor's binary is `agent` on new installs and `cursor-agent` on old
+    ones, so the name cannot be hard-coded."""
+    monkeypatch.setattr(config, "LLM_CLI_BINARY", "/opt/custom/claude")
+    runner = FakeRunner()
+    ClaudeCLIClient("", "m", runner=runner).generate("hi")
+    assert runner.cmd[0] == "/opt/custom/claude"
 
 
 # --- Factory ---

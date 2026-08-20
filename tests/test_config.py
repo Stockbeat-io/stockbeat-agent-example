@@ -73,3 +73,21 @@ def test_no_internal_hosts_in_config():
     source = Path(config.__file__).read_text()
     for host in ("appspot.com", "stockbeat.app"):
         assert host not in source, f"Internal host {host!r} found in config.py"
+
+
+def test_cli_workspace_dir_is_created_and_empty_of_agent_config(monkeypatch, tmp_path):
+    """Codex reads AGENTS.md and Cursor reads .cursor/rules from the cwd.
+
+    Pointing them at an empty directory is what keeps a cron run launched from
+    this repo out of the repo's own agent instructions.
+    """
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    d = config.cli_workspace_dir()
+    assert d.is_dir()
+    assert list(d.iterdir()) == []
+
+
+def test_llm_cli_binary_defaults_to_empty(monkeypatch):
+    monkeypatch.delenv("LLM_CLI_BINARY", raising=False)
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **kw: None)
+    assert importlib.reload(config).LLM_CLI_BINARY == ""

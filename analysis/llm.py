@@ -135,18 +135,42 @@ class AnthropicClient(_HTTPClient):
         return data["content"][0]["text"]
 
 
-class ClaudeCLIClient:
-    """Claude Code CLI in headless mode — for a Pro/Max subscription.
+def _with_system(prompt: str, system: str | None) -> str:
+    """Fold the system prompt into the text, for CLIs with no flag for it."""
+    return f"{system}\n\n{prompt}" if system else prompt
 
-    A subscription has no API key: the credential is an OAuth token the CLI
-    owns and refreshes itself, so there is no header to build and nothing for
-    `_HTTPClient` to send. That is why this is a sibling of the HTTP clients
-    rather than a subclass — it shells out instead of making a request.
 
-    `base_url`, `api_key` and `session` are accepted and ignored so the class
-    stays drop-in for `build_client`, which constructs every provider the same
-    way.
+def _json_result(stdout: str) -> str:
+    """Parse the `{is_error, result}` payload Claude Code and Cursor both emit.
+
+    An API error can still parse as JSON, and `subtype` reads "success" even
+    then — `is_error` is the only honest signal. Its `result` is an English
+    apology, so returning it unchecked would hand the pipeline an apology as if
+    it were an analyst report.
     """
+    payload = json.loads(stdout)
+    if payload.get("is_error"):
+        log.info("LLM | CLI reported an error (status %s): %s",
+                 payload.get("api_error_status"),
+                 str(payload.get("result", ""))[:200])
+        return ""
+    return payload["result"]
+
+
+class _CLIClient:
+    """Shared subprocess transport for CLIs that carry their own credential.
+
+    A subscription has no API key: the credential is an OAuth token the CLI owns
+    and refreshes itself, so there is no header to build and nothing for
+    `_HTTPClient` to send. That is why these are siblings of the HTTP clients
+    rather than subclasses — they shell out instead of making a request.
+
+    Subclasses supply argv, prompt routing and parsing. `base_url`, `api_key`
+    and `session` are accepted and ignored so they stay drop-in for
+    `build_client`, which constructs every provider the same way.
+    """
+
+    BINARY = ""
 
     def __init__(self, base_url: str, model: str, api_key: str = "",
                  session=None, timeout: int = 300, runner=subprocess.run):
@@ -154,7 +178,56 @@ class ClaudeCLIClient:
         self.timeout = timeout
         self._run = runner
 
-    def _command(self, system: str | None) -> list[str]:
+    def _binary(self) -> str:
+        return config.LLM_CLI_BINARY or self.BINARY
+
+    def _command(self, text: str, system: str | None) -> list[str]:
+        raise NotImplementedError
+
+    def _prompt_text(self, prompt: str, system: str | None) -> str:
+        """The prompt as the CLI will receive it.
+
+        Claude takes the system prompt as a flag, so it leaves the text alone.
+        Cursor and Codex document no equivalent and override this to fold it in.
+        """
+        return prompt
+
+    def _stdin(self, text: str) -> str | None:
+        """What to pipe. Cursor overrides to None — it takes the prompt in argv."""
+        return text
+
+    def _parse(self, stdout: str) -> str:
+        """Codex uses this as-is: its stdout *is* the answer."""
+        return stdout.strip()
+
+    def generate(self, prompt: str, system: str | None = None) -> str:
+        """Same contract as _HTTPClient.generate: never raises, "" on failure."""
+        try:
+            text = self._prompt_text(prompt, system)
+            proc = self._run(
+                self._command(text, system),
+                input=self._stdin(text),
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+                cwd=str(config.cli_workspace_dir()),
+            )
+            if proc.returncode != 0:
+                log.info("LLM | %s exit %s: %s", self._binary(),
+                         proc.returncode, (proc.stderr or "")[:200])
+                return ""
+            return self._parse(proc.stdout)
+        except Exception as exc:
+            log.info("LLM | generate failed: %s", exc)
+            return ""
+
+
+class ClaudeCLIClient(_CLIClient):
+    """Claude Code CLI in headless mode — for a Pro/Max subscription."""
+
+    BINARY = "claude"
+
+    def _command(self, text, system):
         # --setting-sources and --strict-mcp-config keep a run launched from the
         # repo out of this project's CLAUDE.md and MCP servers: cost and latency
         # for four text-generation calls that need neither. --tools "" drops the
@@ -164,7 +237,7 @@ class ClaudeCLIClient:
         # Never add --bare here. It looks right for a scripted run, but it
         # restricts auth to ANTHROPIC_API_KEY and never reads the OAuth login,
         # which is the only credential a subscription has.
-        cmd = ["claude", "-p", "--output-format", "json",
+        cmd = [self._binary(), "-p", "--output-format", "json",
                "--strict-mcp-config", "--setting-sources", "", "--tools", ""]
         if self.model:
             cmd += ["--model", self.model]
@@ -172,36 +245,8 @@ class ClaudeCLIClient:
             cmd += ["--append-system-prompt", system]
         return cmd
 
-    def generate(self, prompt: str, system: str | None = None) -> str:
-        """Same contract as _HTTPClient.generate: never raises, "" on failure."""
-        try:
-            # The prompt goes on stdin, not argv — an analyst report plus a
-            # bull/bear exchange runs well past a comfortable argument length.
-            proc = self._run(
-                self._command(system),
-                input=prompt,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout,
-            )
-            if proc.returncode != 0:
-                log.info("LLM | claude CLI exit %s: %s",
-                         proc.returncode, (proc.stderr or "")[:200])
-                return ""
-            payload = json.loads(proc.stdout)
-            # An API error can still parse as JSON, and `subtype` reads
-            # "success" even then — `is_error` is the only honest signal. Its
-            # `result` is an English apology, so returning it unchecked would
-            # hand the pipeline an apology as if it were an analyst report.
-            if payload.get("is_error"):
-                log.info("LLM | claude CLI reported an error (status %s): %s",
-                         payload.get("api_error_status"),
-                         str(payload.get("result", ""))[:200])
-                return ""
-            return payload["result"]
-        except Exception as exc:
-            log.info("LLM | generate failed: %s", exc)
-            return ""
+    def _parse(self, stdout):
+        return _json_result(stdout)
 
 
 _PROVIDERS = {
@@ -211,9 +256,13 @@ _PROVIDERS = {
     "claude-cli": ClaudeCLIClient,
 }
 
-# Providers that carry their own credential and need no LLM_API_KEY: Ollama is
-# local, and the Claude CLI holds a subscription OAuth token.
-_NO_API_KEY_NEEDED = (OllamaClient, ClaudeCLIClient)
+def _needs_api_key(cls) -> bool:
+    """Ollama is local; every CLI provider carries its own credential.
+
+    A predicate rather than a tuple so the next CLI provider is exempt by
+    construction and cannot forget to register itself.
+    """
+    return not (cls is OllamaClient or issubclass(cls, _CLIClient))
 
 
 def build_client(session=None) -> LLMClient:
@@ -236,7 +285,7 @@ def build_client(session=None) -> LLMClient:
             f"LLM_MODEL is required for LLM_PROVIDER={provider!r}. "
             "Set it in .env (for example LLM_MODEL=gpt-4o-mini)."
         )
-    if cls not in _NO_API_KEY_NEEDED and not config.LLM_API_KEY:
+    if _needs_api_key(cls) and not config.LLM_API_KEY:
         raise ValueError(
             f"LLM_API_KEY is required for LLM_PROVIDER={provider!r}. Set it in .env."
         )

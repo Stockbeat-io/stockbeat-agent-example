@@ -43,6 +43,10 @@ _base_default, _model_default = _PROVIDER_DEFAULTS.get(LLM_PROVIDER, ("", ""))
 
 LLM_BASE_URL = os.getenv("LLM_BASE_URL") or _base_default
 LLM_MODEL = os.getenv("LLM_MODEL") or _model_default
+# Overrides the binary name for any CLI provider; also accepts an absolute path.
+# Not polish: Cursor renamed its binary from `cursor-agent` to `agent` and kept
+# both working, so which name exists depends on how old the install is.
+LLM_CLI_BINARY = os.getenv("LLM_CLI_BINARY", "").strip()
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")
 
 # StockBeat records which model made each trading decision and rejects these
@@ -69,6 +73,21 @@ def agent_memory_dir() -> Path:
 def agent_log_dir() -> Path:
     """Return the log directory for the current agent (with mkdir)."""
     d = LOG_DIR / AGENT_NAME
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def cli_workspace_dir() -> Path:
+    """An empty directory for the subscription-CLI providers to run in.
+
+    Codex reads AGENTS.md and Cursor reads .cursor/rules from their working
+    directory. A cron run launched from this repo would otherwise drag
+    trading-agent instructions into four text-generation calls that need none of
+    it — cost, latency, and a real risk of the CLI trying to act on them.
+    Neither CLI has a flag that disables project context, so they get pointed
+    somewhere with none. User-global config (~/.codex/AGENTS.md) still applies.
+    """
+    d = Path.home() / ".stockbeat-agent" / "cli-workspace"
     d.mkdir(parents=True, exist_ok=True)
     return d
 

@@ -34,7 +34,7 @@ LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 # stamped into StockBeat's `llm_model` field, where "sonnet" would record
 # nothing useful about which model actually made the call.
 _PROVIDER_DEFAULTS = {
-    "ollama": ("http://localhost:11434", "mistral:7b"),
+    "ollama": ("http://localhost:11434", "llama3.1"),
     "openai-compatible": ("https://api.openai.com", ""),
     "anthropic": ("https://api.anthropic.com", "claude-sonnet-4-6"),
     "claude-cli": ("", "claude-sonnet-4-6"),
